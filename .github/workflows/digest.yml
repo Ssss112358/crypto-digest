@@ -2,6 +2,10 @@ name: crypto-digest
 on:
   schedule: [{ cron: "0 */6 * * *" }]
   workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/digest.yml"
+      - "requirements.txt"
 concurrency:
   group: crypto-digest
   cancel-in-progress: false
@@ -49,25 +53,29 @@ jobs:
           set -euxo pipefail
           cd "$WORKDIR"
           python3 - <<'PY'
-from pathlib import Path
-from unicodedata import normalize
-path = Path('requirements.txt')
-raw_lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
-clean = []
-for line in raw_lines:
-    s = normalize('NFKC', line).strip()
-    if not s or s.startswith('#'):
-        continue
-    s = s.replace('\uFEFF', '').replace('\u00A0', ' ').strip()
-    if s.lower().startswith('nrequests=='):
-        _, _, version = s.partition('==')
-        s = 'requests==' + (version or '2.32.3')
-    clean.append(s)
-path.write_text('\n'.join(clean) + '\n', encoding='utf-8')
-print('SANITIZED requirements:')
-for idx, line in enumerate(clean, 1):
-    print(f"{idx:02d}: {line}")
-PY
+            from pathlib import Path
+            from unicodedata import normalize
+            path = Path('requirements.txt')
+            raw_lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+            clean = []
+            for line in raw_lines:
+                s = normalize('NFKC', line).strip()
+                if not s or s.startswith('#'):
+                    continue
+                s = s.replace('\uFEFF', '').replace('\u00A0', ' ').strip()
+                if s.lower().startswith('nrequests=='):
+                    _, _, version = s.partition('==')
+                    s = 'requests==' + (version or '2.32.3')
+                clean.append(s)
+            path.write_text('\n'.join(clean) + '\n', encoding='utf-8')
+            print('SANITIZED requirements:')
+            for idx, line in enumerate(clean, 1):
+                print(f"{idx:02d}: {line}")
+          PY
+          if grep -i -n 'nrequests' "$WORKDIR/requirements.txt"; then
+            echo "::error::requirements.txt still contains 'nrequests'"; exit 1
+          fi
+          python3 -m pip install --upgrade pip
           python3 -m pip install -r requirements.txt
 
       - name: Mask secrets
