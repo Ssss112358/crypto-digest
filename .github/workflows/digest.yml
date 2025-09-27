@@ -2,9 +2,6 @@ name: crypto-digest
 on:
   schedule: [{ cron: "0 */6 * * *" }]
   workflow_dispatch:
-  push:
-    paths: [".github/workflows/digest.yml"]
-
 concurrency:
   group: crypto-digest
   cancel-in-progress: false
@@ -44,7 +41,7 @@ jobs:
           echo "::add-mask::$DISCORD_WEBHOOK_URL"
           echo "::add-mask::$TG_STRING_SESSION"
 
-      - name: Run digest job (DRY RUN first)
+      - name: Run digest job
         env:
           TG_API_ID:           ${{ secrets.TG_API_ID }}
           TG_API_HASH:         ${{ secrets.TG_API_HASH }}
