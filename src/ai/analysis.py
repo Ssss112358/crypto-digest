@@ -1,0 +1,36 @@
+from __future__ import annotations
+import google.generativeai as genai
+from typing import Dict, Any
+from .json_utils import safe_json_loads
+from .prompts import DIGEST_PROMPT
+
+def setup_gemini(api_key: str, model: str = "models/gemini-2.0-flash"):
+    genai.configure(api_key=api_key)
+    return genai.GenerativeModel(model, generation_config={
+        "response_mime_type": "application/json",
+        "temperature": 0.2,
+        "max_output_tokens": 8192
+    })
+
+def build_prompt(text_24h: str, text_recent: str, recent_hours: int) -> str:
+    return DIGEST_PROMPT % (recent_hours, text_24h, text_recent)
+
+def analyze_digest(api_key: str, text_24h: str, text_recent: str, recent_hours: int, model_id: str) -> Dict[str, Any]:
+    model = setup_gemini(api_key, model_id)
+    prompt = build_prompt(text_24h, text_recent, recent_hours)
+    # 1st try
+    resp = model.generate_content(prompt)
+    try:
+        return safe_json_loads((resp.text or "").strip())
+    except Exception:
+        # retry
+        resp2 = model.generate_content(prompt + "\n\nJSONのみで再出力してください。")
+        try:
+            return safe_json_loads((resp2.text or "").strip())
+        except Exception:
+            # fallback（空振りゼロ）
+            return {
+                "overall_24h": {"summary": "（LLM要約失敗につき簡易）", "top_entities": [], "events": []},
+                "delta_recent": {"window_hours": recent_hours, "new_topics": [], "updates": [], "deadlines": []}
+            }
+
