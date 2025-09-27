@@ -33,4 +33,3 @@ def analyze_digest(api_key: str, text_24h: str, text_recent: str, recent_hours: 
                 "overall_24h": {"summary": "（LLM要約失敗につき簡易）", "top_entities": [], "events": []},
                 "delta_recent": {"window_hours": recent_hours, "new_topics": [], "updates": [], "deadlines": []}
             }
-

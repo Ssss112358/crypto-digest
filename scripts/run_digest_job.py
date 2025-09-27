@@ -27,7 +27,7 @@ def as_markdown(data: dict, nowstr: str, recent_hours: int) -> str:
     if ov.get("events"):
         lines.append("\n重要イベント:")
         for e in ov["events"][:6]:
-            lines.append(f"- {e.get('title','')}: {e.get('when','')})")
+            lines.append(f"- {e.get('title','')} believable ({e.get('when','')})")
 
     lines.append("")
     lines.append(f"**直近{dc.get('window_hours', recent_hours)}h の新規/変化点**")
@@ -42,12 +42,8 @@ def as_markdown(data: dict, nowstr: str, recent_hours: int) -> str:
     if dc.get("deadlines"):
         lines.append("_締切_")
         for d in dc["deadlines"][:6]:
-            lines.append(f"- {d.get('item','')}: {d.get('due','')}")
+            lines.append(f"- {d.get('item','')} → {d.get('due','')}")
     return "\n".join(lines)
-
-def asyncio_run(coro):
-    import asyncio
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 def main():
     # env
@@ -88,6 +84,10 @@ def main():
     # 状態保存（必要に応じて拡張）
     state = {"last_run": dtfmt(now), "counts": {"24h": len(msgs_24), "recent": len(msgs_recent)}}
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def asyncio_run(coro):
+    import asyncio
+    return asyncio.get_event_loop().run_until_complete(coro)
 
 if __name__ == "__main__":
     main()
