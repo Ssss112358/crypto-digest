@@ -1,0 +1,10 @@
+aliases:
+  ASTER: ASTR
+  ASTRA: ASTR
+  XPL: XPL
+  HANA: HANA
+  MIRA: MIRA
+chains:
+  - Ethereum
+  - Solana
+  - BSC
