@@ -113,6 +113,8 @@ def main():
         return
 
     msgs_24 = asyncio_run(fetch_messages(hours_24, sources, string_session, api_id, api_hash))
+    if not msgs_24:
+        raise RuntimeError(f'No Telegram messages found in the last {hours_24}h for sources: {sources}')
     now = utcnow()
     msgs_recent = [
         msg for msg in msgs_24
