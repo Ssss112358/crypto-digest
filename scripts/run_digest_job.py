@@ -75,9 +75,25 @@ def main():
     # 要約
     result = analyze_digest(GOOGLE_API_KEY, text_24, text_rc, HOURS_RECENT, GEMINI_MODEL)
 
-    # Discord投稿（quiet：本文はログ出力しない）
+    POST_MODE = os.getenv("DISCORD_POST_MODE", "markdown")  # 'markdown' | 'embed'
     md = as_markdown(result, dtfmt(now), HOURS_RECENT)
-    post_markdown(DISCORD_WEBHOOK_URL, md)
+
+    if POST_MODE == "embed":
+        # 画像なしのテキストEmbed（シンプル）
+        import requests
+        payload = {
+            "embeds": [{
+                "title": "AIまとめ",
+                "description": md[:4000],  # Discord埋め込みの制限に合わせて丸め
+                "footer": {"text": "crypto-digest · automated"}
+            }]
+        }
+        r = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=30)
+        if r.status_code >= 300:
+            print(f"[warn] discord status={r.status_code}")
+    else:
+        # 既存のMarkdown投稿（テキストのみ）
+        post_markdown(DISCORD_WEBHOOK_URL, md)
     if not QUIET:
         print(f"[ok] posted digest. 24h={len(msgs_24)} recent={len(msgs_recent)}")
 

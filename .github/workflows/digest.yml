@@ -41,6 +41,7 @@ jobs:
 
           # ログ
           QUIET_LOG: "1"
+          DISCORD_POST_MODE: "markdown"   # ← 当面はテキストのみ
         run: python scripts/run_digest_job.py
 
       - name: Upload state
