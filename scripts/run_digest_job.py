@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 import os
+import sys
 import json
+import asyncio
 from collections import Counter
 from pathlib import Path
 from datetime import datetime, timezone
 
-from src.telegram_pull import fetch_messages
+from dotenv import load_dotenv
+
+from src.telegram_pull import fetch_messages_smart
 from src.bundler import bundle_conversations, bundles_to_text
 from src.ai.analysis import analyze_digest
 from src.delivery.discord import post_markdown
@@ -15,22 +19,26 @@ STATE_DIR = ROOT / "state"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 STATE_FILE = STATE_DIR / "state.json"
 
+load_dotenv(ROOT / '.env')
 
-def utcnow():
+
+def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
-def dtfmt(dt):
+
+def dtfmt(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
-def build_evidence_map(msgs):
-    """Map ISO timestamp to t.me link when available."""
-    mapping = {}
-    for msg in msgs:
+
+def build_evidence_map(messages):
+    mapping: dict[str, str] = {}
+    for msg in messages:
         ts = msg.get('date')
         link = msg.get('link')
         if ts and ts not in mapping:
             mapping[ts] = link
     return mapping
+
 
 def as_markdown(data: dict, nowstr: str, recent_hours: int, evidence_map: dict[str, str]) -> str:
     ov = data.get('overall_24h', {})
@@ -46,7 +54,7 @@ def as_markdown(data: dict, nowstr: str, recent_hours: int, evidence_map: dict[s
             return f' [{hhmm}]({url})'
         return f' {hhmm}' if hhmm else ''
 
-    lines = [f"**AIまとめ（{nowstr} UTC）**", '']
+    lines: list[str] = [f"**AIまとめ（{nowstr} UTC）**", '']
     lines.append('**過去24h 全体要約**')
     if ov.get('summary'):
         lines.append(ov['summary'])
@@ -77,14 +85,35 @@ def as_markdown(data: dict, nowstr: str, recent_hours: int, evidence_map: dict[s
         for item in dc['deadlines'][:6]:
             suffix = tag_first_evidence(item.get('evidence_ids', []))
             lines.append(f"- {item.get('item','')} → {item.get('due','')}{suffix}")
-    return '\n'.join(lines)
+    return "\n".join(lines)
+
+
+def parse_source_specs() -> list[str]:
+    specs_env = os.getenv('SOURCE_SPECS', '').strip()
+    if specs_env:
+        return [s.strip() for s in specs_env.split(',') if s.strip()]
+
+    specs: list[str] = []
+    for raw in os.getenv('SOURCE_CHATS', '').split(','):
+        token = raw.strip()
+        if not token:
+            continue
+        if token.startswith(('title:', 'title~=', 'link:', 'id:', '@', 'username:')):
+            specs.append(token)
+        else:
+            specs.append(f"username:{token.lstrip('@')}")
+    return specs
 
 
 def main():
+    specs = parse_source_specs()
+    if not specs:
+        print('[fatal] SOURCE_SPECS/SOURCE_CHATS が空です')
+        sys.exit(1)
+
     api_id = int(os.getenv('TG_API_ID', '0'))
     api_hash = os.getenv('TG_API_HASH', '')
     string_session = os.getenv('TG_STRING_SESSION', '')
-    sources = [s.strip() for s in os.getenv('SOURCE_CHATS', '').split(',') if s.strip()]
 
     google_api_key = os.getenv('GOOGLE_API_KEY', '')
     gemini_model = os.getenv('GEMINI_MODEL', 'models/gemini-2.0-flash')
@@ -117,8 +146,8 @@ def main():
         print('[dry-run] markdown length:', len(markdown))
         return
 
-    msgs_24 = asyncio_run(fetch_messages(hours_24, sources, string_session, api_id, api_hash))
-    counts = Counter(msg.get('chat') for msg in msgs_24)
+    msgs_24 = asyncio.run(fetch_messages_smart(hours_24, specs, string_session, api_id, api_hash))
+    counts = Counter(msg.get('chat_title') or msg.get('chat_username') for msg in msgs_24)
     if not quiet:
         print(f'[info] telegram 24h counts: {dict(counts)}')
 
@@ -137,7 +166,7 @@ def main():
         result = analyze_digest(google_api_key, text_24, text_recent, hours_recent, gemini_model)
     else:
         if not quiet:
-            print(f'[warn] No Telegram messages found in the last {hours_24}h for sources: {sources}')
+            print(f'[warn] No Telegram messages found in the last {hours_24}h for specs: {specs}')
         msgs_recent = []
         evidence_map = {}
         result = {
@@ -152,7 +181,7 @@ def main():
         import requests
         payload = {
             'embeds': [{
-                'title': 'AI???',
+                'title': 'AIまとめ',
                 'description': markdown[:4000],
                 'footer': {'text': 'crypto-digest - automated'}
             }]
@@ -172,16 +201,12 @@ def main():
     }
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
 
-def asyncio_run(coro):
-    import asyncio
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 if __name__ == '__main__':
-    import traceback
-    import sys
     try:
         main()
     except Exception as exc:
+        import traceback
         print('[fatal] run_digest_job failed:', type(exc).__name__, str(exc)[:300])
         traceback.print_exc()
         sys.exit(1)
