@@ -57,7 +57,7 @@ jobs:
           HOURS_RECENT: "6"
           QUIET_LOG: "0"
           DISCORD_POST_MODE: "markdown"
-          DRY_RUN: "1"
+          DRY_RUN: "0"
         run: |
           set -euxo pipefail
           cd "$WORKDIR"
