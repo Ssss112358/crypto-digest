@@ -25,12 +25,49 @@ jobs:
           echo "WORKDIR=$PWD" >> $GITHUB_ENV
           ls -la
 
-      - name: Python & deps
+
+      - name: Python setup
         run: |
           set -euxo pipefail
           python3 --version
           python3 -m pip install --upgrade pip
+
+      - name: Show commit & requirements (diagnostic)
+        run: |
+          set -euxo pipefail
           cd "$WORKDIR"
+          echo "HEAD = $(git rev-parse HEAD)"
+          echo "Branch = $(git rev-parse --abbrev-ref HEAD)"
+          git log -1 --oneline --decorate
+          echo "---- requirements.txt (print with line numbers) ----"
+          nl -ba requirements.txt
+          echo "---- requirements.txt (hexdump) ----"
+          hexdump -C requirements.txt | sed -n '1,60p'
+
+      - name: Install deps (with sanitize)
+        run: |
+          set -euxo pipefail
+          cd "$WORKDIR"
+          python3 - <<'PY'
+from pathlib import Path
+from unicodedata import normalize
+path = Path('requirements.txt')
+raw_lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
+clean = []
+for line in raw_lines:
+    s = normalize('NFKC', line).strip()
+    if not s or s.startswith('#'):
+        continue
+    s = s.replace('\uFEFF', '').replace('\u00A0', ' ').strip()
+    if s.lower().startswith('nrequests=='):
+        _, _, version = s.partition('==')
+        s = 'requests==' + (version or '2.32.3')
+    clean.append(s)
+path.write_text('\n'.join(clean) + '\n', encoding='utf-8')
+print('SANITIZED requirements:')
+for idx, line in enumerate(clean, 1):
+    print(f"{idx:02d}: {line}")
+PY
           python3 -m pip install -r requirements.txt
 
       - name: Mask secrets

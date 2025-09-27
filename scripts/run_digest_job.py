@@ -77,6 +77,25 @@ def build_evidence_map(messages: List[Dict[str, Any]]) -> Dict[str, str]:
         if ts and ts not in mapping:
             mapping[ts] = link
     return mapping
+def flatten_titles(by_category: Dict[str, Any]) -> Set[str]:
+    titles: Set[str] = set()
+    if not isinstance(by_category, dict):
+        return titles
+    for key, entries in by_category.items():
+        if key == 'other_topics':
+            continue
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            for field in ('title', 'project', 'item'):
+                value = entry.get(field)
+                if value:
+                    titles.add(value)
+                    break
+    return titles
+
 
 def build_prompt_corpus(messages: List[Dict[str, Any]]) -> str:
     rows: List[str] = []
@@ -136,17 +155,17 @@ def build_deadline_table(rows: List[Dict[str, Any]], evidence_map: Dict[str, str
     return "\n".join(lines)
 
 
-def annotate_title(entry: Dict[str, Any], new_set: Set[str], update_set: Set[str], resolved_set: Set[str]) -> str:
+def annotate_title(entry: Dict[str, Any], new_marks: Set[str], update_marks: Set[str], resolved_marks: Set[str]) -> str:
     for key in ("title", "project", "item"):
         value = entry.get(key)
         if not value:
             continue
         labels: List[str] = []
-        if value in new_set:
+        if value in new_marks:
             labels.append("新規")
-        if value in update_set:
+        if value in update_marks:
             labels.append("更新")
-        if value in resolved_set:
+        if value in resolved_marks:
             labels.append("解消")
         if labels:
             return f"{value} ({'/'.join(labels)})"
@@ -155,8 +174,8 @@ def annotate_title(entry: Dict[str, Any], new_set: Set[str], update_set: Set[str
 
 
 def build_category_line(category: str, entry: Dict[str, Any], evidence_map: Dict[str, str],
-                        new_set: Set[str], update_set: Set[str], resolved_set: Set[str]) -> str:
-    title = annotate_title(entry, new_set, update_set, resolved_set)
+                        new_marks: Set[str], update_marks: Set[str], resolved_marks: Set[str]) -> str:
+    title = annotate_title(entry, new_marks, update_marks, resolved_marks)
     what = entry.get("what") or entry.get("reason") or entry.get("signal") or ""
     extras: List[str] = []
     if category == "trading":
@@ -185,20 +204,17 @@ def build_category_line(category: str, entry: Dict[str, Any], evidence_map: Dict
     return bullet
 
 
-def build_markdown(now: datetime, result: Dict[str, Any], evidence_map: Dict[str, str]) -> str:
+def build_markdown(now: datetime, result: Dict[str, Any], evidence_map: Dict[str, str], new_titles: Set[str], update_titles: Set[str], resolved_titles: Set[str]) -> str:
     now_wib = now + WIB_OFFSET
-    delta = result.get("recent_delta", {})
-    new_set = {item.get("title") for item in delta.get("new_topics", []) if item.get("title")}
-    update_set = {item.get("title") for item in delta.get("updates", []) if item.get("title")}
-    resolved_set = {item.get("title") for item in delta.get("resolved", []) if item.get("title")}
-    header_counts = f"新規: +{len(new_set)} / 更新: +{len(update_set)} / 解消: -{len(resolved_set)}"
+    delta = result.get('recent_delta', {})
+    header_counts = f"新規: +{len(new_titles)} / 更新: +{len(update_titles)} / 解消: -{len(resolved_titles)}"
 
     lines: List[str] = []
     lines.append(f"**AIまとめ（{dtfmt(now)} UTC / {(now_wib).strftime('%H:%M')} WIB）**")
     lines.append(header_counts)
-    lines.append("")
+    lines.append('')
 
-    overall = result.get("overall_24h", {})
+    overall = result.get('overall_24h', {})
     lines.append("**過去24h 全体要約**")
     summary = overall.get("summary") or "該当データなし"
     lines.append(summary)
@@ -228,7 +244,7 @@ def build_markdown(now: datetime, result: Dict[str, Any], evidence_map: Dict[str
         if label:
             lines.append(f"**{label}**")
         for entry in entries:
-            lines.append(build_category_line(key, entry, evidence_map, new_set, update_set, resolved_set))
+            lines.append(build_category_line(key, entry, evidence_map, new_titles, update_titles, resolved_titles))
         lines.append("")
 
     other_topics = by_category.get("other_topics") or []
@@ -262,6 +278,8 @@ def main() -> None:
     if not specs:
         print('[fatal] SOURCE_SPECS/SOURCE_CHATS が空です')
         sys.exit(1)
+
+    previous_state = load_state()
 
     api_id = int(os.getenv('TG_API_ID', '0'))
     api_hash = os.getenv('TG_API_HASH', '')
@@ -326,13 +344,24 @@ def main() -> None:
 
     result = analyze_digest(google_api_key, text_24, text_recent, hours_recent, gemini_model)
     evidence_map = build_evidence_map(msgs_24)
-    markdown = build_markdown(now_dt, result, evidence_map)
+
+    delta = result.get('recent_delta', {}) or {}
+    prev_titles = flatten_titles(previous_state.get('by_category', {}))
+    curr_titles = flatten_titles(result.get('by_category', {}))
+    delta_new = {item.get('title') for item in delta.get('new_topics', []) if item.get('title')}
+    delta_updates = {item.get('title') for item in delta.get('updates', []) if item.get('title')}
+    delta_resolved = {item.get('title') for item in delta.get('resolved', []) if item.get('title')}
+    new_titles = (curr_titles - prev_titles) | delta_new
+    resolved_titles = (prev_titles - curr_titles) | delta_resolved
+    update_titles = set(delta_updates)
+
+    markdown = build_markdown(now_dt, result, evidence_map, new_titles, update_titles, resolved_titles)
     post_markdown(discord_webhook, markdown)
 
     state = {
         'timestamp': dtfmt(now_dt),
         'by_category': result.get('by_category', {}),
-        'recent_delta': result.get('recent_delta', {}),
+        'recent_delta': delta,
     }
     save_state(state)
 
