@@ -8,45 +8,36 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - name: Manual checkout (internal only)
+      - name: Checkout (internal)
         env: { TOKEN: ${{ github.token }} }
         run: |
-          set -e
-          git init repo
+          set -euxo pipefail
+          rm -rf repo
+          git clone --depth=1 "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git" repo
           cd repo
-          git remote add origin https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git
-          git fetch --depth=1 origin ${{ github.ref }}
-          git checkout -qf FETCH_HEAD
+          git rev-parse --abbrev-ref HEAD
           echo "WORKDIR=$PWD" >> $GITHUB_ENV
           ls -la
 
-      - name: Install Python via apt
+      - name: Python presence
         run: |
-          set -e
-          sudo apt-get update
-          sudo apt-get install -y python3 python3-venv python3-pip
-          python3 -V
+          set -euxo pipefail
+          python3 --version
+          python3 -m pip --version || true
+
+      - name: Install deps (fail fast when requirements.txt is missing)
+        run: |
+          set -euxo pipefail
+          cd "$WORKDIR"
+          test -f requirements.txt || (echo "requirements.txt missing"; exit 2)
           python3 -m pip install --upgrade pip
-
-      - name: Install deps
-        run: |
-          set -e
-          cd "$WORKDIR"
-          test -f requirements.txt || (echo "requirements.txt missing" && exit 2)
           python3 -m pip install -r requirements.txt
-          python3 - <<'PY'
-import sys, pkgutil
-print("python:", sys.version)
-mods = ["telethon","google.generativeai","requests","dateutil"]
-for m in mods:
-    print(m, "OK" if pkgutil.find_loader(m) else "MISSING")
-PY
 
-      - name: Sanity checks
+      - name: Sanity checks (files exist)
         run: |
-          set -e
+          set -euxo pipefail
           cd "$WORKDIR"
-          test -f scripts/run_digest_job.py || (echo "missing scripts/run_digest_job.py" && exit 3)
-          test -d src || (echo "missing src/" && exit 4)
+          test -f scripts/run_digest_job.py || (echo "missing scripts/run_digest_job.py"; exit 3)
+          test -d src || (echo "missing src/"; exit 4)
           echo "diag done"
 
