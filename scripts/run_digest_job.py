@@ -60,6 +60,27 @@ def main():
     HOURS_24 = int(os.getenv("HOURS_24", "24"))
     HOURS_RECENT = int(os.getenv("HOURS_RECENT", "6"))
     QUIET = os.getenv("QUIET_LOG","0") == "1"
+    DRY_RUN = os.getenv("DRY_RUN", "0") == "1"
+
+    if DRY_RUN:
+        dummy = {
+            "overall_24h": {
+                "summary": "(dry-run) 24h summary",
+                "top_entities": ["HANA(12)", "XPL(9)"],
+                "events": []
+            },
+            "delta_recent": {
+                "window_hours": HOURS_RECENT,
+                "new_topics": [
+                    {"title": "A", "what_changed": "x", "evidence_ids": []}
+                ],
+                "updates": [],
+                "deadlines": []
+            }
+        }
+        md = as_markdown(dummy, dtfmt(utcnow()), HOURS_RECENT)
+        print("[dry-run] markdown length:", len(md))
+        return
 
     # 収集（24hまとめてpull → recentはフィルタ）
     msgs_24 = asyncio_run(fetch_messages(HOURS_24, SOURCES, STRING_SESSION, API_ID, API_HASH))
@@ -106,4 +127,10 @@ def asyncio_run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
 
 if __name__ == "__main__":
-    main()
+    import traceback, sys
+    try:
+        main()
+    except Exception as e:
+        print("[fatal] run_digest_job failed:", type(e).__name__, str(e)[:300])
+        traceback.print_exc()
+        sys.exit(1)

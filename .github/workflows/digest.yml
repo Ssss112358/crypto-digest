@@ -1,48 +1,91 @@
 name: crypto-digest
 on:
-  schedule:
-    - cron: "0 */6 * * *"      # 6時間ごと
+  schedule: [{ cron: "0 */6 * * *" }]
   workflow_dispatch:
 
 concurrency:
   group: crypto-digest
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   run:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
-      - run: pip install -r requirements.txt
-
-      - name: Run digest job
+      - name: Manual checkout (internal only)
         env:
-          # Telegram
-          TG_API_ID: ${{ secrets.TG_API_ID }}
-          TG_API_HASH: ${{ secrets.TG_API_HASH }}
-          TG_STRING_SESSION: ${{ secrets.TG_STRING_SESSION }}
-          SOURCE_CHATS: "kudasai_jp"    # カンマ区切りで複数可
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          git init repo
+          cd repo
+          git remote add origin https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git
+          git fetch --depth=1 origin ${{ github.ref }}
+          git checkout -qf FETCH_HEAD
+          echo "WORKDIR=$PWD" >> $GITHUB_ENV
+          ls -la
 
-          # Gemini
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GEMINI_MODEL: "models/gemini-2.0-flash"
+      - name: Install Python
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-venv python3-pip
+          python3 -V
+          python3 -m pip install --upgrade pip
 
-          # Discord
+      - name: Install deps
+        run: |
+          set -euxo pipefail
+          cd "$WORKDIR"
+          python3 -m pip install -r requirements.txt
+          python3 - <<'PY'
+import sys, pkgutil
+mods=["telethon","google.generativeai","requests","dateutil"]
+miss=[m for m in mods if not pkgutil.find_loader(m)]
+assert not miss, f"Missing modules: {miss}"
+print("Imports OK")
+PY
+
+      - name: Mask secrets (avoid accidental leaks)
+        env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TG_STRING_SESSION: ${{ secrets.TG_STRING_SESSION }}
+        run: |
+          echo "::add-mask::$DISCORD_WEBHOOK_URL"
+          echo "::add-mask::$TG_STRING_SESSION"
 
-          # 窓
+      - name: Run digest job (with verbose error)
+        env:
+          TG_API_ID:           ${{ secrets.TG_API_ID }}
+          TG_API_HASH:         ${{ secrets.TG_API_HASH }}
+          TG_STRING_SESSION:   ${{ secrets.TG_STRING_SESSION }}
+          SOURCE_CHATS:        "kudasai_jp"
+          GOOGLE_API_KEY:      ${{ secrets.GOOGLE_API_KEY }}
+          GEMINI_MODEL:        "models/gemini-2.0-flash"
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           HOURS_24: "24"
           HOURS_RECENT: "6"
-
-          # ログ
-          QUIET_LOG: "1"
-          DISCORD_POST_MODE: "markdown"   # ← 当面はテキストのみ
-        run: python scripts/run_digest_job.py
+          QUIET_LOG: "0"
+          DISCORD_POST_MODE: "markdown"
+          DRY_RUN: "0"
+        run: |
+          set -euxo pipefail
+          cd "$WORKDIR"
+          python3 - <<'PY'
+import os, traceback, sys
+print("Start run_digest_job.py")
+try:
+    import scripts.run_digest_job as job
+    job.main()
+    print("Job finished")
+except Exception as e:
+    print("ERROR:", type(e).__name__, str(e)[:500])
+    print("TRACE:")
+    traceback.print_exc()
+    sys.exit(1)
+PY
 
       - name: Upload state
         if: always()
