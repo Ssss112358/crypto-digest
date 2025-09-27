@@ -17,7 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (internal)
-        env: { TOKEN: ${{ github.token }} }
+        env:
+          TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
           rm -rf repo
