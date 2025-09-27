@@ -1,13 +1,15 @@
 name: diag
-on: [workflow_dispatch]
+on:
+  workflow_dispatch:
+  push:
+    paths: [".github/workflows/diag.yml"]
 
 jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
       - name: Manual checkout (internal only)
-        env:
-          TOKEN: ${{ github.token }}
+        env: { TOKEN: ${{ github.token }} }
         run: |
           set -e
           git init repo
@@ -41,23 +43,10 @@ for m in mods:
 PY
 
       - name: Sanity checks
-        env:
-          SECRET_TG_API_ID: ${{ secrets.TG_API_ID }}
-          SECRET_TG_API_HASH: ${{ secrets.TG_API_HASH }}
-          SECRET_TG_STRING_SESSION: ${{ secrets.TG_STRING_SESSION }}
-          SECRET_GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          SECRET_DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           set -e
           cd "$WORKDIR"
           test -f scripts/run_digest_job.py || (echo "missing scripts/run_digest_job.py" && exit 3)
           test -d src || (echo "missing src/" && exit 4)
-          echo "Secrets set? (not values)"
-          for var in SECRET_TG_API_ID SECRET_TG_API_HASH SECRET_TG_STRING_SESSION SECRET_GOOGLE_API_KEY SECRET_DISCORD_WEBHOOK_URL; do
-            if [ -z "${!var}" ]; then
-              echo "SECRET ${var#SECRET_} = NOT SET"
-              exit 5
-            else
-              echo "SECRET ${var#SECRET_} = <set>"
-            fi
-          done
+          echo "diag done"
+
