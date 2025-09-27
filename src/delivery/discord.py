@@ -5,7 +5,6 @@ def _chunks(s: str, n: int):
 
 def post_markdown(webhook_url: str, markdown: str):
     for part in _chunks(markdown, 1800):
-        r = requests.post(webhook_url, json={"content": part})
-        if r.status_code >= 300:
-            # ここで本文はログに出さない
-            print(f"[warn] discord status={r.status_code}")
+        response = requests.post(webhook_url, json={"content": part}, timeout=30)
+        if response.status_code >= 300:
+            raise RuntimeError(f"discord webhook {response.status_code}: {response.text[:200]}")
