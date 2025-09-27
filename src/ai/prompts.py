@@ -20,7 +20,7 @@ Guidelines:
 - Summarise only facts that appear in the logs; never invent or rely on outside knowledge.
 - evidence_ids must remain in UTC "YYYY-MM-DD HH:MM:SS" format.
 - Each event/topic/deadline must describe the content referenced by the first evidence_ids timestamp.
-- If the logs are empty or insufficient, set summary to "該当データなし" and return empty arrays.
+- If the logs are empty or insufficient, set summary to "\u8a72\u5f53\u30c7\u30fc\u30bf\u306a\u3057" and return empty arrays.
 - Output nothing except the JSON object.
 --- 24h logs ---
 %s
