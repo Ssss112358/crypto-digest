@@ -77,6 +77,9 @@ jobs:
           QUIET_LOG: "0"
           DISCORD_POST_MODE: "markdown"
           DRY_RUN: "0"
+          PIPELINE_V2: "1"
+          PIPELINE_V2_MODE: "tips"
+          EVIDENCE_STYLE: "none"
         run: |
           set -euxo pipefail
           cd "$WORKDIR"

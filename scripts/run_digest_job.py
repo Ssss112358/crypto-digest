@@ -2,6 +2,7 @@
 import os
 import sys
 import json
+import re
 import asyncio
 from collections import Counter
 from datetime import datetime, timezone, timedelta
@@ -12,8 +13,15 @@ from dotenv import load_dotenv
 
 from src.telegram_pull import fetch_messages_smart
 from src.rules import tag_message
-from src.ai.analysis import analyze_digest
+from src.ai.analysis import (
+    analyze_digest,
+    build_prompt_digest_v21,
+    generate_markdown,
+)
+from src.ai.prompts import DIGEST_PROMPT_70_20_10_TIPS
 from src.delivery.discord import post_markdown
+from src.glossary import load_glossary
+from src.extract import extract_candidates, Candidate
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / "state"
@@ -119,6 +127,122 @@ def build_prompt_corpus(messages: List[Dict[str, Any]]) -> str:
         else:
             rows.append(base)
     return "\n---\n".join(rows)
+
+
+def ensure_minimum(base: List[Candidate], supplement: List[Candidate], target_types: Set[str], minimum: int) -> List[Candidate]:
+    count = sum(1 for cand in base if cand.type in target_types)
+    if count >= minimum:
+        return base
+    seen = {(cand.type, cand.project or cand.text[:30]) for cand in base}
+    for cand in supplement:
+        if cand.type not in target_types:
+            continue
+        key = (cand.type, cand.project or cand.text[:30])
+        if key in seen:
+            continue
+        base.append(cand)
+        seen.add(key)
+        count += 1
+        if count >= minimum:
+            break
+    return base
+
+
+def sanitize_text(text: str) -> str:
+    clean = re.sub(r"https?://\S+", "", text)
+    clean = re.sub(r"\b\d{1,2}:\d{2}\b", "", clean)
+    return " ".join(clean.split())
+
+
+def build_fallback_markdown(candidates: List[Candidate]) -> str:
+    def pick_lines(types: Set[str], limit: int) -> List[str]:
+        lines: List[str] = []
+        for cand in candidates:
+            if cand.type not in types:
+                continue
+            if len(lines) >= limit:
+                break
+            head = cand.project or cand.text.split(" ")[0]
+            lines.append(f"- {head} — {sanitize_text(cand.text)}")
+        return lines
+
+    sections: List[str] = ["【フォールバック要約】"]
+    sales_lines = pick_lines({"sale", "airdrop", "mint", "stake", "kyc", "waitlist"}, 12)
+    if sales_lines:
+        sections.append("")
+        sections.append("### セール/エアドロ")
+        sections.extend(sales_lines)
+
+    pipeline_lines = pick_lines({"sale", "airdrop", "mint"}, 8)
+    if pipeline_lines:
+        sections.append("")
+        sections.append("### カタリスト・パイプライン")
+        sections.extend(pipeline_lines)
+
+    tips_lines = pick_lines({"tip"}, 8)
+    if tips_lines:
+        sections.append("")
+        sections.append("### Tips（抽出）")
+        sections.extend(tips_lines)
+
+    risk_lines = pick_lines({"risk"}, 5)
+    if risk_lines:
+        sections.append("")
+        sections.append("### 注意・リスク")
+        sections.extend(risk_lines)
+
+    return os.linesep.join(line for line in sections if line)
+
+
+
+def run_digest_v21(
+    specs: List[str],
+    string_session: str,
+    api_id: int,
+    api_hash: str,
+    google_api_key: str,
+    gemini_model: str,
+    discord_webhook: str,
+    hours_24: int,
+    hours_recent: int,
+    quiet: bool,
+) -> None:
+    msgs_24 = asyncio.run(fetch_messages_smart(hours_24, specs, string_session, api_id, api_hash))
+    for msg in msgs_24:
+        msg['tags'] = tag_message(msg)
+
+    if not quiet:
+        counts = Counter(msg.get('chat_title') or msg.get('chat_username') or msg.get('chat') or '' for msg in msgs_24)
+        print(f'[info] telegram 24h counts: {dict(counts)}')
+
+    now_dt = utcnow()
+    cutoff_recent = now_dt - timedelta(hours=hours_recent)
+    msgs_recent = [
+        msg for msg in msgs_24
+        if datetime.strptime(msg['date'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=UTC) >= cutoff_recent
+    ]
+
+    glossary = load_glossary()
+    candidates_24 = extract_candidates(msgs_24, glossary)
+    candidates_6 = extract_candidates(msgs_recent, glossary)
+
+    combined = candidates_24[:]
+    combined = ensure_minimum(combined, candidates_6, {"sale", "airdrop", "mint", "stake", "kyc", "waitlist"}, 12)
+    combined = ensure_minimum(combined, candidates_6, {"sale", "airdrop", "mint"}, 8)
+    combined = ensure_minimum(combined, candidates_6, {"tip"}, 8)
+    combined = ensure_minimum(combined, candidates_6, {"risk"}, 5)
+
+    prompt = build_prompt_digest_v21(DIGEST_PROMPT_70_20_10_TIPS, combined, msgs_24)
+    markdown = generate_markdown(google_api_key, prompt, gemini_model, temperature=0.3, top_k=40)
+
+    if not markdown or len(markdown.strip()) < 80:
+        if not quiet:
+            print('[warn] LLM returned empty/short output, using fallback markdown.')
+        markdown = build_fallback_markdown(combined)
+
+    post_markdown(discord_webhook, markdown)
+    if not quiet:
+        print('[ok] v2.1 digest posted')
 
 
 def format_links(evidence_ids: List[str], evidence_map: Dict[str, str]) -> str:
@@ -384,6 +508,8 @@ def main() -> None:
     hours_recent = int(os.getenv('HOURS_RECENT', '6'))
     quiet = os.getenv('QUIET_LOG', '0') == '1'
     dry_run = os.getenv('DRY_RUN', '0') == '1'
+    pipeline_v2_flag = os.getenv('PIPELINE_V2', '0') == '1'
+    pipeline_mode = os.getenv('PIPELINE_V2_MODE', '').lower()
 
     now = utcnow()
 
@@ -415,6 +541,21 @@ def main() -> None:
         }
         markdown = build_markdown(now, dummy, {})
         post_markdown(discord_webhook, markdown)
+        return
+
+    if pipeline_v2_flag and pipeline_mode in ('tips', 'tips_v21'):
+        run_digest_v21(
+            specs=specs,
+            string_session=string_session,
+            api_id=api_id,
+            api_hash=api_hash,
+            google_api_key=google_api_key,
+            gemini_model=gemini_model,
+            discord_webhook=discord_webhook,
+            hours_24=hours_24,
+            hours_recent=hours_recent,
+            quiet=quiet,
+        )
         return
 
     msgs_24 = asyncio.run(fetch_messages_smart(hours_24, specs, string_session, api_id, api_hash))
@@ -481,3 +622,5 @@ if __name__ == '__main__':
         print('[fatal] run_digest_job failed:', type(exc).__name__, str(exc)[:300])
         traceback.print_exc()
         sys.exit(1)
+
+

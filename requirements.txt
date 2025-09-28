@@ -1,5 +1,8 @@
-telethon==1.36.0
+﻿telethon==1.36.0
 google-generativeai==0.7.2
 requests==2.32.3
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
+PyYAML==6.0.2
+regex==2024.9.11
+

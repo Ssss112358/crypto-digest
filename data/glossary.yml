@@ -1,0 +1,61 @@
+﻿terms:
+  - key: sale
+    synonyms: ["セール", "プレセール", "ラウンジ", "ローンチ", "launch", "sale"]
+    weight: 1.0
+  - key: airdrop
+    synonyms: ["エアドロ", "airdrop", "配布", "ポイント"]
+    weight: 1.0
+  - key: mint
+    synonyms: ["ミント", "mint", "铸造", "生成"]
+    weight: 1.0
+  - key: stake
+    synonyms: ["ステーク", "ステーキング", "stake", "委任", "ロック", "デポジット"]
+    weight: 1.0
+  - key: kyc
+    synonyms: ["KYC", "本人確認", "身份验证"]
+    weight: 0.9
+  - key: waitlist
+    synonyms: ["ホワイトリスト", "WL", "Waitlist", "登録"]
+    weight: 0.8
+  - key: tips
+    synonyms:
+      - 学び
+      - 教訓
+      - 経験談
+      - あるある
+      - やり方
+      - 方法
+      - 設定
+      - MEV
+      - プロテクション
+      - スリッページ
+      - 自動化
+      - 手動
+      - ボット
+      - RPC
+      - 期待値
+      - Pump
+      - 上場が天井
+      - ポイントが貯まらない
+    weight: 0.9
+  - key: risk
+    synonyms: [運営売り, 高FDV, 薄い板, 詐欺, scam, ラグ, ウォッシュ, インサイダー]
+    weight: 0.8
+
+verbs:
+  submit: [登録, 申請, 応募, サインアップ, フォーム, ホワイトリスト申請]
+  claim:  [Claim, 受け取り, 請求]
+  stake:  [ステーク, 委任, デポジット, ロック, 流動性提供]
+  mint:   [ミント, 発行]
+  follow: [フォロー, 参加, Join, Waitlist登録, 購読, リツイートで参加]
+  check:  [確認, verify, ダッシュボード確認]
+  vote:   [投票, 提案支持]
+  bridge: [ブリッジ, 転送, クロスチェーン]
+
+deny: [草, ｗｗ]
+
+cue_phrases:
+  speculation: [かもしれない, のでは, っぽい, 予想, 推測, 期待, 可能性, となりそう]
+  lesson: [経験談, 学び, 教訓, しがち, になりがち, だった, あるある]
+  howto: [やり方, 方法, 設定, 有効化, 無効化, RPC, MEV, プロテクション, スリッページ, 手動, 自動, ボット]
+  risk: [運営売り, 高FDV, 薄い板, 詐欺, scam, リスク, 注意]
