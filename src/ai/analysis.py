@@ -14,8 +14,22 @@ def setup_gemini(api_key: str, model: str = "models/gemini-2.0-flash"):
     })
 
 def build_prompt(text_24h: str, text_recent: str, recent_hours: int) -> str:
+    schema_prompt = r"""
+
+【返却JSONスキーマ（厳守・キー省略可・ハルシネーション禁止）】
+{
+ "sales_airdrops":[{"project":"","what":"","action":"","requirements":"","wib":"","confidence":"","evidence_ids":[]}],
+ "pipeline":[{"due":"YYYY-MM-DD HH:MM","tz":"UTC","item":"","action":"","requirements":"","confidence":"","evidence_ids":[]}],
+ "act_now":[{"do":"","why":"","evidence_ids":[]}],
+ "earn_to_prepare":[{"tip":"","evidence_ids":[]}],
+ "risks":[{"note":"","evidence_ids":[]}],
+ "market_pulse":["段落1","段落2"],
+ "capsules":[{"topic":"","text":"","evidence_ids":[]}]
+}
+"""
     sections = [
         DIGEST_PROMPT.strip(),
+        schema_prompt.strip(),
         "## 入力データ",
         "### 過去24時間のイベント一覧",
         (text_24h or "").strip(),

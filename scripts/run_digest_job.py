@@ -270,6 +270,102 @@ def parse_source_specs() -> list[str]:
     return specs
 
 
+def build_markdown_v2(now: datetime, result: Dict[str, Any], evidence_map: Dict[str, str]) -> str:
+    now_wib = now + WIB_OFFSET
+    lines: List[str] = []
+    lines.append(f"**AIまとめ（{dtfmt(now)} UTC / {now_wib.strftime('%H:%M')} WIB）**")
+    lines.append("")
+
+    # 1) セール/エアドロ
+    sales = result.get("sales_airdrops") or []
+    if sales:
+        lines.append("### セール/エアドロ（最優先）")
+        for r in sales:
+            segs = []
+            if r.get("project"): segs.append(r["project"])
+            tail = []
+            if r.get("what"): tail.append(r["what"])
+            if r.get("action"): tail.append(r["action"])
+            if r.get("requirements"): tail.append(f"要件: {r['requirements']}")
+            if r.get("wib"): tail.append(f"WIB {r['wib']}")
+            if r.get("confidence"): tail.append(f"確度: {r['confidence']}")
+            body = " — " + " / ".join(tail) if tail else ""
+            # 証跡時刻は必要な場合だけ付けたいが、LLMが入れてこない前提なら省略でOK
+            lines.append("- " + " ".join(segs) + body)
+        lines.append("")
+
+    # 2) パイプライン
+    pipe = result.get("pipeline") or []
+    if pipe:
+        lines.append("### カタリスト・パイプライン（48h〜2週間）")
+        for r in pipe:
+            due = r.get("due"); tz = r.get("tz") or "UTC"
+            due_disp = f"{due} ({tz})"
+            if due:
+                try:
+                    dt_utc = datetime.strptime(due, "%Y-%m-%d %H:%M").replace(tzinfo=UTC)
+                    due_disp += f" / WIB {(dt_utc+WIB_OFFSET).strftime('%H:%M')}"
+                except Exception:
+                    pass
+            tail = []
+            if r.get("item"): tail.append(r["item"])
+            if r.get("action"): tail.append(r["action"])
+            if r.get("requirements"): tail.append(f"要件: {r['requirements']}")
+            if r.get("confidence"): tail.append(f"確度: {r['confidence']}")
+            lines.append(f"- {due_disp} — " + " / ".join(tail))
+        lines.append("")
+
+    # 3) いま動け
+    act = result.get("act_now") or []
+    if act:
+        lines.append("### いま動け（Top 5）")
+        for r in act[:5]:
+            do = r.get("do") or ""
+            why = r.get("why") or ""
+            line = f"- {do}"
+            if why: line += f" — {why}"
+            lines.append(line)
+        lines.append("")
+
+    # 4) Earn to Prepare
+    etp = result.get("earn_to_prepare") or []
+    if etp:
+        lines.append("### Earn to Prepare（将来配布に効く行動）")
+        for r in etp:
+            tip = r.get("tip") or ""
+            if tip: lines.append(f"- {tip}")
+        lines.append("")
+
+    # 5) 注意・リスク
+    risks = result.get("risks") or []
+    if risks:
+        lines.append("### 注意・リスク")
+        for r in risks:
+            note = r.get("note") or ""
+            if note: lines.append(f"- {note}")
+        lines.append("")
+
+    # 6) Market Pulse（補足）
+    mp = result.get("market_pulse") or []
+    if mp:
+        lines.append("### Market Pulse（補足）")
+        for p in mp[:2]:
+            if p: lines.append(p)
+        lines.append("")
+
+    # 7) トピック・カプセル
+    caps = result.get("capsules") or []
+    if caps:
+        lines.append("### トピック・カプセル")
+        for c in caps:
+            t = c.get("topic"); txt = c.get("text")
+            if t and txt:
+                lines.append(f"- **{t}** — {txt}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def main() -> None:
     specs = parse_source_specs()
     if not specs:
@@ -347,41 +443,31 @@ def main() -> None:
     result = analyze_digest(google_api_key, text_24, text_recent, hours_recent, gemini_model)
 
     # Fallback mechanism
-    summary_is_empty = not result or (result.get("overall_24h", {}).get("summary") or "該当データなし") in ["該当データなし", "（LLM要約失敗につき簡易）"]
+    summary_is_empty = not result or not any(result.get(k) for k in ["sales_airdrops", "pipeline", "act_now", "market_pulse", "capsules"])
     if summary_is_empty and priority_msgs:
-        print("[info] LLM summary was empty, using fallback with priority messages.")
-        fallback_lines = [f"**AI要約失敗時のフォールバック：優先キーワードを含むメッセージ**\n"]
-        for msg in priority_msgs[:15]: # Display up to 15 priority messages
-            text_single = (msg.get("text") or "").replace("\n", " ").strip()
-            title = msg.get("chat_title") or msg.get("chat_username") or "Unknown"
-            fallback_lines.append(f"- **{title}**: {text_single}")
-        fallback_markdown = "\n".join(fallback_lines)
-        post_markdown(discord_webhook, fallback_markdown)
-        # End the process here after posting fallback
-        print("[ok] posted fallback digest.")
+        print("[info] LLM summary was empty, using action-first fallback.")
+        lines = ["### セール/エアドロ速報（フォールバック）"]
+        for msg in priority_msgs[:20]:
+            text = (msg.get("text") or "").replace("\n"," ").strip()
+            # 余計な長文は丸める（リンク除去は既に無い設計だが念のため）
+            if len(text) > 160: text = text[:157] + "…"
+            lines.append(f"- {text}")
+        post_markdown(discord_webhook, "\n".join(lines))
         return
 
     evidence_map = build_evidence_map(msgs_24)
 
-    delta = result.get('recent_delta', {}) or {}
-    prev_titles = flatten_titles(previous_state.get('by_category', {}))
-    curr_titles = flatten_titles(result.get('by_category', {}))
-    delta_new = {item.get('title') for item in delta.get('new_topics', []) if item.get('title')}
-    delta_updates = {item.get('title') for item in delta.get('updates', []) if item.get('title')}
-    delta_resolved = {item.get('title') for item in delta.get('resolved', []) if item.get('title')}
-    new_titles = (curr_titles - prev_titles) | delta_new
-    resolved_titles = (prev_titles - curr_titles) | delta_resolved
-    update_titles = set(delta_updates)
-
-    markdown = build_markdown(now_dt, result, evidence_map, new_titles, update_titles, resolved_titles)
+    # 新規（v2描画）
+    markdown = build_markdown_v2(now_dt, result, evidence_map)
     post_markdown(discord_webhook, markdown)
 
-    state = {
-        'timestamp': dtfmt(now_dt),
-        'by_category': result.get('by_category', {}),
-        'recent_delta': delta,
-    }
-    save_state(state)
+    # 旧スキーマに依存するため状態保存は一旦無効化
+    # state = {
+    #     'timestamp': dtfmt(now_dt),
+    #     'by_category': result.get('by_category', {}),
+    #     'recent_delta': delta,
+    # }
+    # save_state(state)
 
     if not quiet:
         print(f"[ok] posted digest. 24h={len(msgs_24)} recent={len(msgs_recent)}")
