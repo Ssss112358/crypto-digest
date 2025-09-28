@@ -1,18 +1,10 @@
-tokens:
-  XPL1: XPL
-  Aster: ASTER
-  Astar: ASTER
-  HANA.: HANA
-  UPHL: HYPE
-  Hyperliquid: HYPE
+aliases:
+  ASTER: ASTR
+  ASTRA: ASTR
+  XPL: XPL
+  HANA: HANA
+  MIRA: MIRA
 chains:
-  HyperEVM: Hyperliquid
-projects:
-  "Kudasai JP": KUDASAI
-keywords:
-  entry: ["entry","ロング","ショート","成行","指値","IN","入る"]
-  sl: ["SL","損切","ロスカ"]
-  tp: ["TP","利確","ターゲット"]
-  sale: ["セール","IDO","IEO","トークンセール","公開"]
-  airdrop: ["エアドロ","airdrop","claim","クレーム","points","pts"]
-  deadline: ["締切","〆切","期限","デッドライン","ends","by","until"]
+  - Ethereum
+  - Solana
+  - BSC

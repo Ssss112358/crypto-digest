@@ -32,35 +32,33 @@ CATEGORY_KEYS = {
 }
 
 
-def _load_aliases() -> Dict[str, Any]:
+def _load_aliases() -> Dict[str, str]:
     if ALIAS_PATH.exists():
         try:
             data = yaml.safe_load(ALIAS_PATH.read_text(encoding="utf-8")) or {}
-            return {
-                "tokens": {k.upper(): v.upper() for k, v in data.get("tokens", {}).items()},
-                "chains": {str(item).upper() for item in data.get("chains", [])},
-                "projects": {k.upper(): v.upper() for k, v in data.get("projects", {}).items()},
-                "keywords": {k: [re.compile(r"(?i)\\b" + kw + r"\\b") for kw in v] for k, v in data.get("keywords", {}).items()},
-            }
+            aliases = data.get("aliases", {})
+            return {k.upper(): v.upper() for k, v in aliases.items()}
         except Exception:
-            return {"tokens": {}, "chains": set(), "projects": {}, "keywords": {}}
-    return {"tokens": {}, "chains": set(), "projects": {}, "keywords": {}}
+            return {}
+    return {}
 
 
-_ALIASES_DATA = _load_aliases()
-_TOKEN_ALIASES = _ALIASES_DATA["tokens"]
-_CHAIN_NAMES = _ALIASES_DATA["chains"]
-_PROJECT_ALIASES = _ALIASES_DATA["projects"]
-_KEYWORD_PATTERNS = _ALIASES_DATA["keywords"]
+def _load_chain_names() -> Set[str]:
+    if ALIAS_PATH.exists():
+        try:
+            data = yaml.safe_load(ALIAS_PATH.read_text(encoding="utf-8")) or {}
+            return {str(item) for item in data.get("chains", [])}
+        except Exception:
+            return set()
+    return set()
+
+_ALIASES = _load_aliases()
+_CHAIN_NAMES = _load_chain_names()
 
 
 def _normalize_topic(token: str) -> str:
     up = token.upper()
-    if up in _TOKEN_ALIASES:
-        return _TOKEN_ALIASES[up]
-    if up in _PROJECT_ALIASES:
-        return _PROJECT_ALIASES[up]
-    return up
+    return _ALIASES.get(up, up)
 
 
 def _extract_topics(text: str) -> Set[str]:
@@ -70,12 +68,8 @@ def _extract_topics(text: str) -> Set[str]:
             continue
         if len(match) <= 2:
             continue
-        topics.add(_normalize_topic(match))
-
-    for project_alias in _PROJECT_ALIASES.keys():
-        if project_alias.lower() in text.lower():
-            topics.add(_PROJECT_ALIASES[project_alias])
-
+        norm = _normalize_topic(match)
+        topics.add(norm)
     for chain in _CHAIN_NAMES:
         if chain.lower() in text.lower():
             topics.add(chain)
@@ -100,7 +94,6 @@ def tag_message(message: Dict[str, Any]) -> Dict[str, Any]:
     text = message.get("text", "") or ""
     lower = text.lower()
     categories: Set[str] = set()
-    action_tags: Set[str] = set()
 
     if _EMERGENCY_PATTERN.search(text):
         categories.add("emergency")
@@ -119,20 +112,6 @@ def tag_message(message: Dict[str, Any]) -> Dict[str, Any]:
     if _RESOURCE_PATTERN.search(text) or _URL_PATTERN.search(text):
         categories.add("resources")
 
-    for tag_name, patterns in _KEYWORD_PATTERNS.items():
-        for pattern in patterns:
-            if pattern.search(text):
-                action_tags.add(tag_name)
-                if tag_name == "entry" or tag_name == "sl" or tag_name == "tp":
-                    categories.add("trading")
-                elif tag_name == "sale":
-                    categories.add("sales")
-                elif tag_name == "airdrop":
-                    categories.add("airdrops")
-                elif tag_name == "deadline":
-                    categories.add("deadlines")
-                break
-
     topics = _extract_topics(text)
     deadline = _extract_deadline(text)
 
@@ -140,5 +119,4 @@ def tag_message(message: Dict[str, Any]) -> Dict[str, Any]:
         "categories": sorted(categories),
         "topics": sorted(topics),
         "deadline": deadline,
-        "action_tags": sorted(action_tags),
     }
