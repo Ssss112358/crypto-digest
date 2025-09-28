@@ -325,6 +325,11 @@ def main() -> None:
     for msg in msgs_24:
         msg['tags'] = tag_message(msg)
 
+    sale_keywords = ["IDO", "プレセール", "プレマ", "claim", "エアドロ", "ポイント", "ホワイトリスト", "KYC", "ステーク", "Mint", "セール", "ローンチ", "launch", "sale", "airdrop"]
+    priority_msgs = [msg for msg in msgs_24 if any(k.lower() in (msg.get('text') or "").lower() for k in sale_keywords)]
+    other_msgs = [msg for msg in msgs_24 if not any(k.lower() in (msg.get('text') or "").lower() for k in sale_keywords)]
+    msgs_24 = priority_msgs + other_msgs
+
     counts = Counter(msg.get('chat_title') or msg.get('chat_username') or msg.get('chat') or '' for msg in msgs_24)
     if not quiet:
         print(f'[info] telegram 24h counts: {dict(counts)}')
@@ -340,6 +345,22 @@ def main() -> None:
     text_recent = build_prompt_corpus(msgs_recent)
 
     result = analyze_digest(google_api_key, text_24, text_recent, hours_recent, gemini_model)
+
+    # Fallback mechanism
+    summary_is_empty = not result or (result.get("overall_24h", {}).get("summary") or "該当データなし") in ["該当データなし", "（LLM要約失敗につき簡易）"]
+    if summary_is_empty and priority_msgs:
+        print("[info] LLM summary was empty, using fallback with priority messages.")
+        fallback_lines = [f"**AI要約失敗時のフォールバック：優先キーワードを含むメッセージ**\n"]
+        for msg in priority_msgs[:15]: # Display up to 15 priority messages
+            text_single = (msg.get("text") or "").replace("\n", " ").strip()
+            title = msg.get("chat_title") or msg.get("chat_username") or "Unknown"
+            fallback_lines.append(f"- **{title}**: {text_single}")
+        fallback_markdown = "\n".join(fallback_lines)
+        post_markdown(discord_webhook, fallback_markdown)
+        # End the process here after posting fallback
+        print("[ok] posted fallback digest.")
+        return
+
     evidence_map = build_evidence_map(msgs_24)
 
     delta = result.get('recent_delta', {}) or {}
