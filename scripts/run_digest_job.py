@@ -127,7 +127,7 @@ def format_links(evidence_ids: List[str], evidence_map: Dict[str, str]) -> str:
         hhmm = ts[11:16] if len(ts) >= 16 else ts
         url = evidence_map.get(ts)
         if url:
-            pieces.append(f"[{hhmm}]({url})")
+            pieces.append(hhmm) # リンクを生成せず時刻のみを出力
         else:
             pieces.append(hhmm)
     return " ".join(pieces)
