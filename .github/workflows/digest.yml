@@ -68,7 +68,7 @@ jobs:
           TG_API_ID:           ${{ secrets.TG_API_ID }}
           TG_API_HASH:         ${{ secrets.TG_API_HASH }}
           TG_STRING_SESSION:   ${{ secrets.TG_STRING_SESSION }}
-          SOURCE_SPECS:        "link=https://t.me/KudasaiJP"
+          SOURCE_SPECS:        "title~=kudasai.*jp"
           GOOGLE_API_KEY:      ${{ secrets.GOOGLE_API_KEY }}
           GEMINI_MODEL:        "models/gemini-2.0-flash"
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
