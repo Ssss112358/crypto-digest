@@ -52,9 +52,11 @@ jobs:
         run: |
           set -euxo pipefail
           cd "$WORKDIR"
+
           python3 - <<'PY'
-            from pathlib import Path
-            from unicodedata import normalize
+from pathlib import Path
+from unicodedata import normalize
+
             path = Path('requirements.txt')
             raw_lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
             clean = []
@@ -62,12 +64,14 @@ jobs:
                 s = normalize('NFKC', line).strip()
                 if not s or s.startswith('#'):
                     continue
-                s = s.replace('\uFEFF', '').replace('\u00A0', ' ').strip()
+                s = s.replace('﻿', '').replace(' ', ' ').strip()
                 if s.lower().startswith('nrequests=='):
                     _, _, version = s.partition('==')
                     s = 'requests==' + (version or '2.32.3')
                 clean.append(s)
-            path.write_text('\n'.join(clean) + '\n', encoding='utf-8')
+            path.write_text('
+'.join(clean) + '
+', encoding='utf-8')
             print('SANITIZED requirements:')
             for idx, line in enumerate(clean, 1):
                 print(f"{idx:02d}: {line}")
