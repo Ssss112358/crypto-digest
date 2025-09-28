@@ -13,7 +13,15 @@ def setup_gemini(api_key: str, model: str = "models/gemini-2.0-flash"):
     })
 
 def build_prompt(text_24h: str, text_recent: str, recent_hours: int) -> str:
-    return DIGEST_PROMPT % (recent_hours, text_24h, text_recent)
+    sections = [
+        DIGEST_PROMPT.strip(),
+        "## 入力データ",
+        "### 過去24時間のイベント一覧",
+        (text_24h or "").strip(),
+        f"### 直近{recent_hours}時間の重点イベント",
+        (text_recent or "").strip(),
+    ]
+    return "\n\n".join(part for part in sections if part)
 
 def analyze_digest(api_key: str, text_24h: str, text_recent: str, recent_hours: int, model_id: str) -> Dict[str, Any]:
     model = setup_gemini(api_key, model_id)
