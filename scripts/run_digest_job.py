@@ -52,8 +52,15 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def dtfmt(dt: datetime) -> str:
+def dtfmt_utc_sec(dt: datetime) -> str:
     return dt.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+
+WIB = timezone(timedelta(hours=7))
+def to_wib_str(dt: datetime) -> str:
+    return dt.astimezone(WIB).strftime("%H:%M")  # HH:MM
+def to_wib_full(dt: datetime) -> str:
+    return dt.astimezone(WIB).strftime("%Y-%m-%d %H:%M WIB")
 
 
 def load_state() -> Dict[str, Any]:
