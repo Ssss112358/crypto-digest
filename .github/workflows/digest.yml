@@ -76,8 +76,9 @@ jobs:
             for idx, line in enumerate(clean, 1):
                 print(f"{idx:02d}: {line}")
             PY
-            echo "::error::requirements.txt still contains 'nrequests'"; exit 1
-          fi
+            if grep -i -n 'nrequests' "$WORKDIR/requirements.txt"; then
+              echo "::error::requirements.txt still contains 'nrequests'"; exit 1
+            fi
           python3 -m pip install --upgrade pip
           python3 -m pip install -r requirements.txt
 
