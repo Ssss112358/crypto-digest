@@ -17,17 +17,31 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (internal)
+      - name: Checkout (internal, exact ref)
         env:
           TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
+          REPO="https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git"
+          REF="${GITHUB_REF}"
+          REF_NAME="${GITHUB_REF_NAME:-main}"
+          SHA="${GITHUB_SHA}"
+
           rm -rf repo
-          git clone --depth=1 "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git" repo
+          git clone --no-checkout "$REPO" repo
           cd repo
-          git rev-parse --abbrev-ref HEAD
+          git fetch --depth=1 origin "$REF" || git fetch --depth=1 origin "$REF_NAME"
+          if [ -n "$SHA" ]; then
+            git fetch --depth=1 origin "$SHA" || true
+            git checkout --detach "$SHA"
+          else
+            git checkout --detach "origin/$REF_NAME"
+          fi
+
+          echo "Checked out SHA: $(git rev-parse HEAD)"
+          echo "From ref       : ${REF} (${REF_NAME})"
           echo "WORKDIR=$PWD" >> $GITHUB_ENV
-          ls -la
+          git log -1 --oneline --decorate
 
 
       - name: Python setup
@@ -47,6 +61,22 @@ jobs:
           nl -ba requirements.txt
           echo "---- requirements.txt (hexdump) ----"
           hexdump -C requirements.txt | sed -n '1,60p'
+
+      - name: Show suspect lines (run_digest_job.py)
+        run: |
+          set -euxo pipefail
+          cd "$WORKDIR"
+          nl -ba scripts/run_digest_job.py | sed -n '185,210p'
+
+      - name: Py compile run_digest_job.py
+        run: |
+          set -euxo pipefail
+          cd "$WORKDIR"
+          python3 - <<'PY'
+          import py_compile
+          py_compile.compile("scripts/run_digest_job.py", doraise=True)
+          print("py_compile OK")
+          PY
 
       - name: Install dependencies
         run: |
@@ -87,12 +117,12 @@ jobs:
           import os, traceback, sys
           print("Start run_digest_job.py")
           try:
-              import scripts.run_digest_job as job
-              job.main()
-              print("Job finished")
+          import scripts.run_digest_job as job
+          job.main()
+          print("Job finished")
           except Exception as e:
-              print("ERROR:", type(e).__name__, str(e)[:500])
-              print("TRACE:")
-              traceback.print_exc()
-              sys.exit(1)
+          print("ERROR:", type(e).__name__, str(e)[:500])
+          print("TRACE:")
+          traceback.print_exc()
+          sys.exit(1)
           PY
