@@ -273,7 +273,7 @@ def parse_source_specs() -> list[str]:
 def build_markdown_v2(now: datetime, result: Dict[str, Any], evidence_map: Dict[str, str]) -> str:
     now_wib = now + WIB_OFFSET
     lines: List[str] = []
-    lines.append(f"**AIまとめ（{dtfmt(now)} UTC / {now_wib.strftime('%H:%M')} WIB）**")
+    lines.append(f"**🔶KudasaiJP Telegramまとめ（{dtfmt(now)} UTC / {now_wib.strftime('%H:%M')} WIB）**")
     lines.append("")
 
     # 1) セール/エアドロ
