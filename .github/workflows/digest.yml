@@ -74,9 +74,7 @@ jobs:
 ', encoding='utf-8')
           print('SANITIZED requirements:')
           for idx, line in enumerate(clean, 1):
-              print(f"{idx:02d}: {line}")
-          PY
-          if grep -i -n 'nrequests' "$WORKDIR/requirements.txt"; then
+        PY
             echo "::error::requirements.txt still contains 'nrequests'"; exit 1
           fi
           python3 -m pip install --upgrade pip
