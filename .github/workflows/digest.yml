@@ -63,12 +63,22 @@ jobs:
           echo "::add-mask::$DISCORD_WEBHOOK_URL"
           echo "::add-mask::$TG_STRING_SESSION"
 
+      - name: List joined dialogs (once for picking correct spec)
+        env:
+          TG_API_ID:           ${{ secrets.TG_API_ID }}
+          TG_API_HASH:         ${{ secrets.TG_API_HASH }}
+          TG_STRING_SESSION:   ${{ secrets.TG_STRING_SESSION }}
+        run: |
+          set -euxo pipefail
+          cd "$WORKDIR"
+          python3 scripts/list_dialogs.py | tee dialogs.txt
+
       - name: Run digest job
         env:
           TG_API_ID:           ${{ secrets.TG_API_ID }}
           TG_API_HASH:         ${{ secrets.TG_API_HASH }}
           TG_STRING_SESSION:   ${{ secrets.TG_STRING_SESSION }}
-          SOURCE_CHATS:        "kudasai_jp"
+          SOURCE_SPECS:        "title~=kudasai.*jp"
           GOOGLE_API_KEY:      ${{ secrets.GOOGLE_API_KEY }}
           GEMINI_MODEL:        "models/gemini-2.0-flash"
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
