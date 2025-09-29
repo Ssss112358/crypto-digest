@@ -98,6 +98,8 @@ def build_prompt_digest_v21(prompt_template: str, candidates: Sequence[Any], mes
             {
                 "sender": msg.get("sender") or msg.get("from") or "",
                 "text": (msg.get("text") or "")[:200],
+                "time_utc": msg.get("date", ""),
+                "time_wib": msg.get("time_wib", ""),
             }
         )
     evidence_json = json.dumps(evidence, ensure_ascii=False)

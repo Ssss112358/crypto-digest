@@ -12,6 +12,7 @@ class Candidate:
     action: str
     text: str
     time_wib: str
+    time_utc: str
     score: float
     source_idx: int
     tags: List[str]
@@ -98,6 +99,7 @@ def extract_candidates(messages: List[Dict[str, Any]], glossary: Dict[str, Any])
                 action=action,
                 text=text.strip().replace("\n", " ")[:160],
                 time_wib=message.get("time_wib", "") or "",
+                time_utc=message.get("date", "") or "",
                 score=score,
                 source_idx=idx,
                 tags=tags,
