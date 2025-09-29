@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import os
 import sys
 import json
@@ -191,8 +191,8 @@ def build_fallback_markdown(candidates: List[Candidate]) -> str:
         sections.append("### 注意・リスク")
         sections.extend(risk_lines)
 
-    return "
-".join(line for line in sections if line)
+    return os.linesep.join(line for line in sections if line)
+
 
 
 def run_digest_v21(
