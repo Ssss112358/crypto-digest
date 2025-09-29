@@ -117,12 +117,12 @@ jobs:
           import os, traceback, sys
           print("Start run_digest_job.py")
           try:
-          import scripts.run_digest_job as job
-          job.main()
-          print("Job finished")
+              import scripts.run_digest_job as job
+              job.main()
+              print("Job finished")
           except Exception as e:
-          print("ERROR:", type(e).__name__, str(e)[:500])
-          print("TRACE:")
-          traceback.print_exc()
-          sys.exit(1)
+              print("ERROR:", type(e).__name__, str(e)[:500])
+              print("TRACE:")
+              traceback.print_exc()
+              sys.exit(1)
           PY
