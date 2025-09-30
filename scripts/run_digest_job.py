@@ -3,7 +3,7 @@ import os
 import sys
 import json
 import asyncio
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Set
@@ -280,18 +280,23 @@ def build_markdown_v2(now: datetime, result: Dict[str, Any], evidence_map: Dict[
     sales = result.get("sales_airdrops") or []
     if sales:
         lines.append("### セール/エアドロ（最優先）")
+        grouped_sales = defaultdict(list)
         for r in sales:
-            segs = []
-            if r.get("project"): segs.append(r["project"])
-            tail = []
-            if r.get("what"): tail.append(r["what"])
-            if r.get("action"): tail.append(r["action"])
-            if r.get("requirements"): tail.append(f"要件: {r['requirements']}")
-            wib_value = r.get("wib")
-                            if wib_value and wib_value != "不明":
-                                tail.append(f"WIB {wib_value}")            body = " — " + " / ".join(tail) if tail else ""
-            # 証跡時刻は必要な場合だけ付けたいが、LLMが入れてこない前提なら省略でOK
-            lines.append("- " + " ".join(segs) + body)
+            project = r.get("project") or "不明なプロジェクト"
+            what = r.get("what") or "不明なトピック"
+            grouped_sales[(project, what)].append(r)
+
+        for (project, what), entries in grouped_sales.items():
+            lines.append(f"- {project} — {what}")
+            for entry in entries:
+                tail = []
+                if entry.get("action"): tail.append(entry["action"])
+                if entry.get("requirements"): tail.append(f"要件: {entry['requirements']}")
+                wib_value = entry.get("wib")
+                if wib_value and wib_value != "不明":
+                    tail.append(f"WIB {wib_value}")
+                detail_body = " / ".join(tail) if tail else ""
+                lines.append(f"  - {detail_body}")
         lines.append("")
 
     # 2) パイプライン
