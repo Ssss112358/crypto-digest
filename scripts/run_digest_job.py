@@ -298,7 +298,7 @@ def build_markdown_v2(now: datetime, result: Dict[str, Any], evidence_map: Dict[
                 tail = []
                 if entry.get("action"): tail.append(entry["action"])
                 requirements_value = entry.get("requirements")
-                if requirements_value and requirements_value != "不明":
+                if requirements_value and requirements_value != "不明" and requirements_value != "なし":
                     tail.append(f"要件: {requirements_value}")
                 wib_value = entry.get("wib")
                 if wib_value and wib_value != "不明":
@@ -324,7 +324,7 @@ def build_markdown_v2(now: datetime, result: Dict[str, Any], evidence_map: Dict[
             if r.get("item"): tail.append(r["item"])
             if r.get("action"): tail.append(r["action"])
             requirements_value = r.get("requirements")
-            if requirements_value and requirements_value != "不明":
+            if requirements_value and requirements_value != "不明" and requirements_value != "なし":
                 tail.append(f"要件: {requirements_value}")
 
             lines.append(f"- {due_disp} — " + " / ".join(tail))
