@@ -10,17 +10,18 @@ from pathlib import Path
 from typing import Any, Dict, List, Set
 
 from dotenv import load_dotenv
+import yaml
 
 from src.telegram_pull import fetch_messages_smart
 from src.rules import tag_message
 from src.ai.analysis import (
     analyze_digest,
     build_prompt_digest_v21,
+    append_dictionary_sections,
     generate_markdown,
 )
-from src.ai.prompts import DIGEST_PROMPT_70_20_10_TIPS
+from src.ai.prompts import DIGEST_PROMPT_V221_SIMPLE
 from src.delivery.discord import post_markdown
-from src.glossary import load_glossary
 from src.extract import extract_candidates, Candidate
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -129,69 +130,127 @@ def build_prompt_corpus(messages: List[Dict[str, Any]]) -> str:
     return "\n---\n".join(rows)
 
 
-def ensure_minimum(base: List[Candidate], supplement: List[Candidate], target_types: Set[str], minimum: int) -> List[Candidate]:
-    count = sum(1 for cand in base if cand.type in target_types)
-    if count >= minimum:
-        return base
-    seen = {(cand.type, cand.project or cand.text[:30]) for cand in base}
-    for cand in supplement:
-        if cand.type not in target_types:
-            continue
-        key = (cand.type, cand.project or cand.text[:30])
-        if key in seen:
-            continue
-        base.append(cand)
-        seen.add(key)
-        count += 1
-        if count >= minimum:
-            break
-    return base
+def load_alias_map() -> Dict[str, Any]:
+    path = ROOT / "data" / "aliases.yml"
+    if not path.exists():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
 
 
 def sanitize_text(text: str) -> str:
     clean = re.sub(r"https?://\S+", "", text)
-    clean = re.sub(r"\b\d{1,2}:\d{2}\b", "", clean)
+    clean = re.sub(r"#[\w\-]+", "", clean)
     return " ".join(clean.split())
 
 
+def _format_candidate_line(cand: Candidate) -> str:
+    body = sanitize_text(cand.text)
+    if cand.project:
+        return f"- {cand.project} — {body}"
+    return f"- {body}"
+
+
 def build_fallback_markdown(candidates: List[Candidate]) -> str:
-    def pick_lines(types: Set[str], limit: int) -> List[str]:
-        lines: List[str] = []
-        for cand in candidates:
-            if cand.type not in types:
-                continue
-            if len(lines) >= limit:
-                break
-            head = cand.project or cand.text.split(" ")[0]
-            lines.append(f"- {head} — {sanitize_text(cand.text)}")
-        return lines
+    lines: List[str] = []
 
-    sections: List[str] = ["【フォールバック要約】"]
-    sales_lines = pick_lines({"sale", "airdrop", "mint", "stake", "kyc", "waitlist"}, 12)
-    if sales_lines:
-        sections.append("")
-        sections.append("### セール/エアドロ")
-        sections.extend(sales_lines)
+    sale_types = {"sale", "airdrop", "mint", "stake", "kyc", "waitlist"}
+    sales = [_format_candidate_line(c) for c in candidates if c.type in sale_types][:10]
+    if sales:
+        lines.append("### セール/エアドロ（最優先）")
+        lines.extend(sales)
+        lines.append("")
 
-    pipeline_lines = pick_lines({"sale", "airdrop", "mint"}, 8)
-    if pipeline_lines:
-        sections.append("")
-        sections.append("### カタリスト・パイプライン")
-        sections.extend(pipeline_lines)
+    pipeline_candidates = [c for c in candidates if "absolute_date" in c.tags][:10]
+    if pipeline_candidates:
+        lines.append("### カタリスト・パイプライン（48h〜2週間）")
+        for cand in pipeline_candidates:
+            lines.append(_format_candidate_line(cand))
+        lines.append("")
 
-    tips_lines = pick_lines({"tip"}, 8)
-    if tips_lines:
-        sections.append("")
-        sections.append("### Tips（抽出）")
-        sections.extend(tips_lines)
+    act_now = [_format_candidate_line(c) for c in candidates if "actionable" in c.tags][:5]
+    if act_now:
+        lines.append("### いま動け（Top）")
+        lines.extend(act_now)
+        lines.append("")
 
-    risk_lines = pick_lines({"risk"}, 5)
-    if risk_lines:
-        sections.append("")
-        sections.append("### 注意・リスク")
-        sections.extend(risk_lines)
+    earn_candidates = [c for c in candidates if c.type not in sale_types and "actionable" in c.tags][:5]
+    if earn_candidates:
+        lines.append("### Earn to Prepare")
+        for cand in earn_candidates:
+            lines.append(_format_candidate_line(cand))
+        lines.append("")
 
-    return os.linesep.join(line for line in sections if line)
+    risks = [_format_candidate_line(c) for c in candidates if c.type == "risk"][:5]
+    if risks:
+        lines.append("### 注意・リスク")
+        lines.extend(risks)
+        lines.append("")
+
+    market_notes = [sanitize_text(c.text) for c in candidates if c.type == "market"]
+    if market_notes:
+        lines.append("### Market Pulse（補足）")
+        lines.append(market_notes[0])
+        lines.append("")
+
+    return "\n".join(line for line in lines if line is not None)
+
+
+FORBIDDEN_PHRASES = (
+    "最新の情報を収集",
+    "最新情報を収集",
+    "DYOR",
+    "do your own research",
+    "情報を集めて",
+    "注視して",
+)
+
+RELATIVE_ONLY_PATTERN = re.compile(
+    r"\b(soon|later|shortly|まもなく|すぐ|程なく|直後|今夜|今朝|今後|そのうち|後で|来週|明日|tomorrow)\b",
+    re.IGNORECASE,
+)
+ABS_DATE_RE = re.compile(r"\b20\d{2}-\d{2}-\d{2}\b")
+CLOCK_RE = re.compile(r"\b\d{1,2}:\d{2}\b")
+
+
+def _line_has_forbidden_phrase(line: str) -> bool:
+    lowered = line.lower()
+    return any(phrase.lower() in lowered for phrase in FORBIDDEN_PHRASES)
+
+
+def _line_is_relative_only(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped.startswith("-"):
+        return False
+    content = stripped.lstrip("- ")
+    if not content:
+        return False
+    if ABS_DATE_RE.search(content) or CLOCK_RE.search(content):
+        return False
+    if RELATIVE_ONLY_PATTERN.search(content) and not re.search(r"\d", content):
+        return True
+    return False
+
+
+def _detect_output_issues(text: str) -> bool:
+    for line in text.splitlines():
+        if _line_has_forbidden_phrase(line) or _line_is_relative_only(line):
+            return True
+    return False
+
+
+def _clean_output(text: str) -> str:
+    cleaned: List[str] = []
+    for line in text.splitlines():
+        if _line_has_forbidden_phrase(line) or _line_is_relative_only(line):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned).strip()
 
 
 
@@ -222,23 +281,46 @@ def run_digest_v21(
         if datetime.strptime(msg['date'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=UTC) >= cutoff_recent
     ]
 
-    glossary = load_glossary()
-    candidates_24 = extract_candidates(msgs_24, glossary)
-    candidates_6 = extract_candidates(msgs_recent, glossary)
+    alias_map = load_alias_map()
+    candidates_24 = extract_candidates(msgs_24, alias_map)
+    candidates_6 = extract_candidates(msgs_recent, alias_map)
 
     combined = candidates_24[:]
-    combined = ensure_minimum(combined, candidates_6, {"sale", "airdrop", "mint", "stake", "kyc", "waitlist"}, 12)
-    combined = ensure_minimum(combined, candidates_6, {"sale", "airdrop", "mint"}, 8)
-    combined = ensure_minimum(combined, candidates_6, {"tip"}, 8)
-    combined = ensure_minimum(combined, candidates_6, {"risk"}, 5)
+    recent_lookup = {(c.type, c.project or c.text[:40]): c for c in candidates_6}
+    for key, cand in recent_lookup.items():
+        if key in {(c.type, c.project or c.text[:40]) for c in combined}:
+            continue
+        combined.append(cand)
 
-    prompt = build_prompt_digest_v21(DIGEST_PROMPT_70_20_10_TIPS, combined, msgs_24)
+    prompt_template = append_dictionary_sections(DIGEST_PROMPT_V221_SIMPLE.strip())
+    prompt = build_prompt_digest_v21(prompt_template, combined, msgs_24)
     markdown = generate_markdown(google_api_key, prompt, gemini_model, temperature=0.3, top_k=40)
 
-    if not markdown or len(markdown.strip()) < 80:
+    markdown = markdown.strip() if markdown else ""
+
+    if len(markdown) < 80:
         if not quiet:
             print('[warn] LLM returned empty/short output, using fallback markdown.')
         markdown = build_fallback_markdown(combined)
+    else:
+        if _detect_output_issues(markdown):
+            if not quiet:
+                print('[info] retrying markdown generation to remove generalities.')
+            retry_prompt = prompt + "\n\n一般論や相対時刻だけの行が含まれていたため、該当箇所を削除して再生成してください。"
+            retry = generate_markdown(
+                google_api_key,
+                retry_prompt,
+                gemini_model,
+                temperature=0.25,
+                top_k=40,
+            )
+            retry_text = (retry or "").strip()
+            if retry_text and not _detect_output_issues(retry_text):
+                markdown = retry_text
+            else:
+                markdown = _clean_output(retry_text or markdown)
+
+    markdown = _clean_output(markdown)
 
     post_markdown(discord_webhook, markdown)
     if not quiet:

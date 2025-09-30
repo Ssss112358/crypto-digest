@@ -1,12 +1,80 @@
 ﻿from __future__ import annotations
 import json
 import logging
-from typing import Any, Dict, Iterable, Sequence
+from pathlib import Path
+from typing import Any, Dict, Sequence
 
 import google.generativeai as genai
+import yaml
 
 from .json_utils import safe_json_loads
-from .prompts import DIGEST_PROMPT, DIGEST_PROMPT_70_20_10_TIPS
+from .prompts import DIGEST_PROMPT_V221_SIMPLE
+
+
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+
+
+def load_yaml(name: str) -> Dict[str, Any]:
+    path = Path(name)
+    if not path.is_absolute():
+        path = DATA_DIR / name
+    if not path.exists():
+        raise FileNotFoundError(name)
+    try:
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+
+
+def append_dictionary_sections(prompt: str) -> str:
+    result = prompt
+
+    try:
+        alias_doc = load_yaml("aliases.yml")
+        alias_lines: list[str] = []
+        for key, value in (alias_doc.get("aliases") or {}).items():
+            if not key or not value:
+                continue
+            alias_lines.append(f"- {key}: {value}")
+        for chain in alias_doc.get("chains") or []:
+            if chain:
+                alias_lines.append(f"- チェーン: {chain}")
+        if alias_lines:
+            snippet = "\n".join(alias_lines[:50])
+            result += "\n\n# エイリアス\n" + snippet
+    except Exception:
+        pass
+
+    try:
+        gloss_doc = load_yaml("glossary.yml")
+        items: list[str] = []
+        if isinstance(gloss_doc, dict):
+            if "terms" in gloss_doc:
+                for entry in gloss_doc.get("terms", []) or []:
+                    if not isinstance(entry, dict):
+                        continue
+                    key = entry.get("key")
+                    desc = entry.get("desc") or entry.get("description")
+                    synonyms = entry.get("synonyms") or []
+                    detail = desc or ", ".join(str(s) for s in synonyms[:5] if s)
+                    if key:
+                        if detail:
+                            items.append(f"- {key}: {detail}")
+                        else:
+                            items.append(f"- {key}")
+            else:
+                for key, value in gloss_doc.items():
+                    if isinstance(value, dict):
+                        desc = value.get("desc") or value.get("description") or ""
+                        items.append(f"- {key}: {desc}")
+                    else:
+                        items.append(f"- {key}: {value}")
+        if items:
+            result += "\n\n# 用語メモ\n" + "\n".join(items[:50])
+    except Exception:
+        pass
+
+    return result
 
 
 def setup_gemini(api_key: str, model: str = "models/gemini-2.0-flash"):
@@ -35,7 +103,7 @@ def build_prompt(text_24h: str, text_recent: str, recent_hours: int) -> str:
 }
 """
     sections = [
-        DIGEST_PROMPT.strip(),
+        append_dictionary_sections(DIGEST_PROMPT_V221_SIMPLE.strip()),
         schema_prompt.strip(),
         "## 入力データ",
         "### 過去24時間のイベント一覧",
@@ -68,17 +136,6 @@ def analyze_digest(api_key: str, text_24h: str, text_recent: str, recent_hours: 
 
 
 def build_prompt_digest_v21(prompt_template: str, candidates: Sequence[Any], messages: Sequence[Dict[str, Any]], evidence_limit: int = 40) -> str:
-    def pick(cands: Iterable[Any], allowed: set[str], top_n: int) -> list[Any]:
-        subset = [c for c in cands if c.type in allowed]
-        return subset[:top_n]
-
-    sales_like = pick(candidates, {"sale", "airdrop", "mint", "stake", "kyc", "waitlist"}, 120)
-    pipeline = pick(candidates, {"sale", "airdrop", "mint"}, 60)
-    tips = pick(candidates, {"tip"}, 80)
-    risks = pick(candidates, {"risk"}, 40)
-
-    merged = [*sales_like, *pipeline, *tips, *risks]
-
     def serialize_candidate(obj: Any) -> dict[str, Any]:
         if hasattr(obj, "__dict__"):
             return dict(vars(obj))
@@ -86,10 +143,11 @@ def build_prompt_digest_v21(prompt_template: str, candidates: Sequence[Any], mes
             return dict(obj)
         return dict(obj)
 
-    cand_json = json.dumps([serialize_candidate(c) for c in merged], ensure_ascii=False)
+    cand_list = list(candidates)
+    cand_json = json.dumps([serialize_candidate(c) for c in cand_list], ensure_ascii=False)
 
     evidence = []
-    for cand in merged[:evidence_limit]:
+    for cand in cand_list[:evidence_limit]:
         idx = getattr(cand, "source_idx", None)
         if idx is None or idx >= len(messages):
             continue
