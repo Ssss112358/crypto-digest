@@ -282,16 +282,24 @@ def build_markdown_v2(now: datetime, result: Dict[str, Any], evidence_map: Dict[
         lines.append("### セール/エアドロ（最優先）")
         grouped_sales = defaultdict(list)
         for r in sales:
-            project = r.get("project") or "不明なプロジェクト"
-            what = r.get("what") or "不明なトピック"
+            project = r.get("project")
+            what = r.get("what")
             grouped_sales[(project, what)].append(r)
 
         for (project, what), entries in grouped_sales.items():
-            lines.append(f"- {project} — {what}")
+            header_parts = []
+            if project: header_parts.append(project)
+            if what: header_parts.append(what)
+            if header_parts:
+                lines.append(f"- {' — '.join(header_parts)}")
+            else:
+                lines.append("- (不明な項目)")
             for entry in entries:
                 tail = []
                 if entry.get("action"): tail.append(entry["action"])
-                if entry.get("requirements"): tail.append(f"要件: {entry['requirements']}")
+                requirements_value = entry.get("requirements")
+                if requirements_value and requirements_value != "不明":
+                    tail.append(f"要件: {requirements_value}")
                 wib_value = entry.get("wib")
                 if wib_value and wib_value != "不明":
                     tail.append(f"WIB {wib_value}")
@@ -315,7 +323,9 @@ def build_markdown_v2(now: datetime, result: Dict[str, Any], evidence_map: Dict[
             tail = []
             if r.get("item"): tail.append(r["item"])
             if r.get("action"): tail.append(r["action"])
-            if r.get("requirements"): tail.append(f"要件: {r['requirements']}")
+            requirements_value = r.get("requirements")
+            if requirements_value and requirements_value != "不明":
+                tail.append(f"要件: {requirements_value}")
 
             lines.append(f"- {due_disp} — " + " / ".join(tail))
         lines.append("")
