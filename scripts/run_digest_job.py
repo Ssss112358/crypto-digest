@@ -288,10 +288,8 @@ def build_markdown_v2(now: datetime, result: Dict[str, Any], evidence_map: Dict[
             if r.get("action"): tail.append(r["action"])
             if r.get("requirements"): tail.append(f"要件: {r['requirements']}")
             wib_value = r.get("wib")
-            if wib_value and wib_value != "不明":
-                tail.append(f"WIB {wib_value}")
-            if r.get("confidence"): tail.append(f"確度: {r['confidence']}")
-            body = " — " + " / ".join(tail) if tail else ""
+                            if wib_value and wib_value != "不明":
+                                tail.append(f"WIB {wib_value}")            body = " — " + " / ".join(tail) if tail else ""
             # 証跡時刻は必要な場合だけ付けたいが、LLMが入れてこない前提なら省略でOK
             lines.append("- " + " ".join(segs) + body)
         lines.append("")
@@ -313,7 +311,7 @@ def build_markdown_v2(now: datetime, result: Dict[str, Any], evidence_map: Dict[
             if r.get("item"): tail.append(r["item"])
             if r.get("action"): tail.append(r["action"])
             if r.get("requirements"): tail.append(f"要件: {r['requirements']}")
-            if r.get("confidence"): tail.append(f"確度: {r['confidence']}")
+
             lines.append(f"- {due_disp} — " + " / ".join(tail))
         lines.append("")
 
