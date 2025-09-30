@@ -7,21 +7,32 @@ import asyncio
 from collections import Counter
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from dotenv import load_dotenv
+import yaml
 
 from src.telegram_pull import fetch_messages_smart
 from src.rules import tag_message
 from src.ai.analysis import (
-    analyze_digest,
     build_prompt_digest_v21,
+    append_dictionary_sections,
     generate_markdown,
+    build_story_prompt,
+    resolve_subject,
+    defluff,
 )
-from src.ai.prompts import DIGEST_PROMPT_70_20_10_TIPS
+from src.ai.prompts import DIGEST_PROMPT_V225_STORY
 from src.delivery.discord import post_markdown
-from src.glossary import load_glossary
-from src.extract import extract_candidates, Candidate
+from src.extract import (
+    extract_candidates,
+    Candidate,
+    collect_spans,
+    group_topics,
+    MessageSpan,
+    TopicBundle,
+)
+from src.summarize.story import build_story_seeds, StorySeed
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / "state"
@@ -129,70 +140,160 @@ def build_prompt_corpus(messages: List[Dict[str, Any]]) -> str:
     return "\n---\n".join(rows)
 
 
-def ensure_minimum(base: List[Candidate], supplement: List[Candidate], target_types: Set[str], minimum: int) -> List[Candidate]:
-    count = sum(1 for cand in base if cand.type in target_types)
-    if count >= minimum:
-        return base
-    seen = {(cand.type, cand.project or cand.text[:30]) for cand in base}
-    for cand in supplement:
-        if cand.type not in target_types:
-            continue
-        key = (cand.type, cand.project or cand.text[:30])
-        if key in seen:
-            continue
-        base.append(cand)
-        seen.add(key)
-        count += 1
-        if count >= minimum:
-            break
-    return base
+def load_alias_map() -> Dict[str, Any]:
+    path = ROOT / "data" / "aliases.yml"
+    if not path.exists():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
 
 
 def sanitize_text(text: str) -> str:
     clean = re.sub(r"https?://\S+", "", text)
-    clean = re.sub(r"\b\d{1,2}:\d{2}\b", "", clean)
+    clean = re.sub(r"#[\w\-]+", "", clean)
     return " ".join(clean.split())
 
 
-def build_fallback_markdown(candidates: List[Candidate]) -> str:
-    def pick_lines(types: Set[str], limit: int) -> List[str]:
-        lines: List[str] = []
-        for cand in candidates:
-            if cand.type not in types:
+def _format_candidate_line(cand: Candidate) -> str:
+    body = sanitize_text(cand.text)
+    if cand.project:
+        return f"- {cand.project} — {body}"
+    return f"- {body}"
+
+
+def _shorten(text: str, limit: int = 200) -> str:
+    stripped = (text or "").strip()
+    if len(stripped) <= limit:
+        return stripped
+    return stripped[: limit - 1] + "…"
+
+
+def _span_to_line(span: MessageSpan, include_time: bool = False) -> str:
+    body = _shorten(span.clean_text, 220)
+    meta: List[str] = []
+    if include_time and span.time_utc:
+        meta.append(f"UTC {span.time_utc}")
+    if include_time and span.time_wib:
+        meta.append(f"WIB {span.time_wib}")
+    if meta:
+        body = f"{body} ({', '.join(meta)})"
+    if span.project:
+        return f"- {span.project} — {body}"
+    return f"- {body}"
+
+
+def _sort_spans(spans: Sequence[MessageSpan]) -> List[MessageSpan]:
+    return sorted(
+        spans,
+        key=lambda s: (-s.score, s.time_utc or "", s.clean_text),
+    )
+
+
+def _select_spans(
+    spans: Sequence[MessageSpan],
+    predicate,
+    limit: int,
+) -> List[MessageSpan]:
+    selected: List[MessageSpan] = []
+    seen: Set[tuple[str, str]] = set()
+    for span in _sort_spans(spans):
+        if not predicate(span):
+            continue
+        key = (span.project, span.clean_text)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(span)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _format_story_material(seed: StorySeed) -> str:
+    lines = [f"[TOPIC] {seed.topic}", "TIMELINE:"]
+    lines.extend(seed.timeline)
+    lines.append(f"WHY: {seed.why}" if seed.why else "WHY:")
+    lines.append(f"IMPACT: {seed.impact}" if seed.impact else "IMPACT:")
+    lines.append(f"NEXT: {seed.next}" if seed.next else "NEXT:")
+    return "\n".join(lines)
+
+
+def build_fallback_markdown(
+    candidates: List[Candidate],
+    topics: Optional[List[TopicBundle]] = None,
+    spans: Optional[List[MessageSpan]] = None,
+) -> str:
+    phrases: List[str] = []
+
+    if topics:
+        for bundle in topics[:3]:
+            lead = bundle.messages[0] if bundle.messages else None
+            snippet = _shorten(lead.clean_text if lead else "", 160)
+            subject = bundle.name.strip()
+            if subject and snippet:
+                if subject in snippet:
+                    phrases.append(snippet)
+                else:
+                    phrases.append(f"{subject}で{snippet}")
+
+    sources = spans or []
+    if not phrases and sources:
+        for span in sources[:5]:
+            subject = span.project.strip() if span.project else "未特定案件"
+            snippet = _shorten(span.clean_text, 160)
+            if not snippet:
                 continue
-            if len(lines) >= limit:
+            if subject and subject in snippet:
+                phrases.append(snippet)
+            else:
+                phrases.append(f"{subject}で{snippet}")
+
+    if not phrases and candidates:
+        for cand in candidates[:5]:
+            subject = cand.project.strip() if cand.project else "未特定案件"
+            snippet = _shorten(cand.text, 160)
+            if not snippet:
+                continue
+            if subject and subject in snippet:
+                phrases.append(snippet)
+            else:
+                phrases.append(f"{subject}で{snippet}")
+
+    risk_notes: List[str] = []
+    if spans:
+        for span in spans:
+            if "risk" in span.tags:
+                subject = span.project.strip() if span.project else "この案件"
+                detail = _shorten(span.clean_text, 120)
+                if detail:
+                    if subject in detail:
+                        risk_notes.append(detail)
+                    else:
+                        risk_notes.append(f"{subject}は{detail}")
+            if len(risk_notes) >= 2:
                 break
-            head = cand.project or cand.text.split(" ")[0]
-            lines.append(f"- {head} — {sanitize_text(cand.text)}")
-        return lines
 
-    sections: List[str] = ["【フォールバック要約】"]
-    sales_lines = pick_lines({"sale", "airdrop", "mint", "stake", "kyc", "waitlist"}, 12)
-    if sales_lines:
-        sections.append("")
-        sections.append("### セール/エアドロ")
-        sections.extend(sales_lines)
+    if not phrases and not risk_notes:
+        summary = "具体的な更新を拾えませんでした。主要ログを再確認してください。"
+    else:
+        summary = " / ".join(phrases) if phrases else ""
+        if risk_notes:
+            risk_text = " / ".join(risk_notes)
+            if summary:
+                summary = f"{summary}。リスク面では{risk_text}"
+            else:
+                summary = f"リスク面では{risk_text}"
 
-    pipeline_lines = pick_lines({"sale", "airdrop", "mint"}, 8)
-    if pipeline_lines:
-        sections.append("")
-        sections.append("### カタリスト・パイプライン")
-        sections.extend(pipeline_lines)
+    summary = summary.strip()
+    if summary and summary[-1] not in "。.!?":
+        summary += "。"
 
-    tips_lines = pick_lines({"tip"}, 8)
-    if tips_lines:
-        sections.append("")
-        sections.append("### Tips（抽出）")
-        sections.extend(tips_lines)
-
-    risk_lines = pick_lines({"risk"}, 5)
-    if risk_lines:
-        sections.append("")
-        sections.append("### 注意・リスク")
-        sections.extend(risk_lines)
-
-    return os.linesep.join(line for line in sections if line)
-
+    return "### セール/エアドロ\n" + summary
 
 
 def run_digest_v21(
@@ -222,27 +323,51 @@ def run_digest_v21(
         if datetime.strptime(msg['date'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=UTC) >= cutoff_recent
     ]
 
-    glossary = load_glossary()
-    candidates_24 = extract_candidates(msgs_24, glossary)
-    candidates_6 = extract_candidates(msgs_recent, glossary)
+    alias_map = load_alias_map()
+    candidates_24 = extract_candidates(msgs_24, alias_map)
+    for cand in candidates_24:
+        if not cand.project:
+            subject = resolve_subject(cand.source_idx, msgs_24, alias_map)
+            if subject:
+                cand.project = subject
+
+    candidates_6 = extract_candidates(msgs_recent, alias_map)
+    for cand in candidates_6:
+        if not cand.project:
+            subject = resolve_subject(cand.source_idx, msgs_recent, alias_map)
+            if subject:
+                cand.project = subject
 
     combined = candidates_24[:]
-    combined = ensure_minimum(combined, candidates_6, {"sale", "airdrop", "mint", "stake", "kyc", "waitlist"}, 12)
-    combined = ensure_minimum(combined, candidates_6, {"sale", "airdrop", "mint"}, 8)
-    combined = ensure_minimum(combined, candidates_6, {"tip"}, 8)
-    combined = ensure_minimum(combined, candidates_6, {"risk"}, 5)
+    recent_lookup = {(c.type, c.project or c.text[:40]): c for c in candidates_6}
+    for key, cand in recent_lookup.items():
+        if key in {(c.type, c.project or c.text[:40]) for c in combined}:
+            continue
+        combined.append(cand)
 
-    prompt = build_prompt_digest_v21(DIGEST_PROMPT_70_20_10_TIPS, combined, msgs_24)
+    prompt_template = append_dictionary_sections(DIGEST_PROMPT_V225_STORY.strip())
+    prompt = build_prompt_digest_v21(prompt_template, combined, msgs_24)
     markdown = generate_markdown(google_api_key, prompt, gemini_model, temperature=0.3, top_k=40)
 
-    if not markdown or len(markdown.strip()) < 80:
+    markdown = markdown.strip() if markdown else ""
+
+    if len(markdown) < 80:
         if not quiet:
             print('[warn] LLM returned empty/short output, using fallback markdown.')
         markdown = build_fallback_markdown(combined)
+    else:
+        cleaned = defluff(markdown)
+        if cleaned:
+            markdown = cleaned
+
+    if len(markdown.strip()) < 40:
+        markdown = build_fallback_markdown(combined)
+
+    markdown = defluff(markdown) or markdown
 
     post_markdown(discord_webhook, markdown)
     if not quiet:
-        print('[ok] v2.1 digest posted')
+        print('[ok] digest fallback v2.1 posted')
 
 
 def format_links(evidence_ids: List[str], evidence_map: Dict[str, str]) -> str:
@@ -578,40 +703,99 @@ def main() -> None:
         if datetime.strptime(msg['date'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=UTC) >= cutoff_recent
     ]
 
+    alias_map = load_alias_map()
+    spans_24 = collect_spans(msgs_24, alias_map)
+    for span in spans_24:
+        if not span.project:
+            subject = resolve_subject(span.source_idx, msgs_24, alias_map)
+            if subject:
+                span.project = subject
+    topics = group_topics(spans_24)
+    story_seeds = build_story_seeds(topics)
+    candidates = extract_candidates(msgs_24, alias_map)
+    for cand in candidates:
+        if not cand.project:
+            subject = resolve_subject(cand.source_idx, msgs_24, alias_map)
+            if subject:
+                cand.project = subject
+
+    sale_types = {"sale", "airdrop", "mint", "stake", "kyc", "waitlist"}
+    sales_spans = _select_spans(
+        spans_24,
+        lambda span: span.kind in sale_types or "actionable" in span.tags,
+        limit=12,
+    )
+    pipeline_spans = _select_spans(
+        spans_24,
+        lambda span: "absolute_date" in span.tags,
+        limit=12,
+    )
+    act_spans = _select_spans(
+        spans_24,
+        lambda span: "actionable" in span.tags and "absolute_date" not in span.tags,
+        limit=8,
+    )
+    risk_spans = _select_spans(spans_24, lambda span: "risk" in span.tags, limit=6)
+    market_spans = _select_spans(spans_24, lambda span: "market" in span.tags, limit=5)
+
+    story_blocks = [_format_story_material(seed) for seed in story_seeds]
+    sales_lines = [_span_to_line(span, include_time=True) for span in sales_spans]
+    pipeline_lines = [_span_to_line(span, include_time=True) for span in pipeline_spans]
+    act_lines = [_span_to_line(span) for span in act_spans]
+    risk_lines = [_span_to_line(span) for span in risk_spans]
+    market_lines = [f"- {_shorten(span.clean_text, 200)}" for span in market_spans]
+
     text_24 = build_prompt_corpus(msgs_24)
     text_recent = build_prompt_corpus(msgs_recent)
 
-    result = analyze_digest(google_api_key, text_24, text_recent, hours_recent, gemini_model)
-
-    # Fallback mechanism
-    summary_is_empty = not result or not any(result.get(k) for k in ["sales_airdrops", "pipeline", "act_now", "market_pulse", "capsules"])
-    if summary_is_empty and priority_msgs:
-        print("[info] LLM summary was empty, using action-first fallback.")
-        lines = ["### セール/エアドロ速報（フォールバック）"]
-        for msg in priority_msgs[:20]:
-            text = (msg.get("text") or "").replace("\n"," ").strip()
-            # 余計な長文は丸める（リンク除去は既に無い設計だが念のため）
-            if len(text) > 160: text = text[:157] + "…"
-            lines.append(f"- {text}")
-        post_markdown(discord_webhook, "\n".join(lines))
-        return
-
-    evidence_map = build_evidence_map(msgs_24)
-
-    # 新規（v2描画）
-    markdown = build_markdown_v2(now_dt, result, evidence_map)
-    post_markdown(discord_webhook, markdown)
-
-    # 旧スキーマに依存するため状態保存は一旦無効化
-    # state = {
-    #     'timestamp': dtfmt(now_dt),
-    #     'by_category': result.get('by_category', {}),
-    #     'recent_delta': delta,
-    # }
-    # save_state(state)
+    prompt = build_story_prompt(
+        story_materials=story_blocks,
+        sales_lines=sales_lines,
+        pipeline_lines=pipeline_lines,
+        act_now_lines=act_lines,
+        risk_lines=risk_lines,
+        market_notes=market_lines,
+        text_24h=text_24,
+        text_recent=text_recent,
+        recent_hours=hours_recent,
+    )
 
     if not quiet:
-        print(f"[ok] posted digest. 24h={len(msgs_24)} recent={len(msgs_recent)}")
+        for seed in story_seeds[:5]:
+            print(f"[debug] story seed: {seed.topic} score={seed.score:.2f}")
+            for line in seed.timeline[:3]:
+                print(f"        {line}")
+
+    markdown = generate_markdown(
+        google_api_key,
+        prompt,
+        gemini_model,
+        temperature=0.32,
+        top_k=40,
+        max_output_tokens=2800,
+    )
+    markdown = (markdown or "").strip()
+
+    if len(markdown) < 120:
+        if not quiet:
+            print('[warn] LLM returned empty/short output, using fallback markdown.')
+        markdown = build_fallback_markdown(candidates, topics, spans_24)
+    else:
+        cleaned = defluff(markdown)
+        if cleaned:
+            markdown = cleaned
+
+    if len(markdown.strip()) < 40:
+        markdown = build_fallback_markdown(candidates, topics, spans_24)
+
+    markdown = defluff(markdown) or markdown
+
+    post_markdown(discord_webhook, markdown)
+
+    if not quiet:
+        print(
+            f"[ok] posted digest v2.2. 24h={len(msgs_24)} recent={len(msgs_recent)} topics={len(topics)}"
+        )
 
 
 if __name__ == '__main__':
