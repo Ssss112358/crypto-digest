@@ -16,7 +16,8 @@ def load_msgs(hours_24: int, context_window_days: int, specs: List[str], string_
     total_hours = max(hours_24, context_window_days * 24)
     return asyncio.run(fetch_messages_smart(total_hours, specs, string_session, api_id, api_hash))
 
-def setup_gemini(api_key: str, model: str = "models/gemini-2.0-flash"):    genai.configure(api_key=api_key)
+def setup_gemini(api_key: str, model: str = "models/gemini-2.0-flash"):
+    genai.configure(api_key=api_key)
     return genai.GenerativeModel(model, generation_config={
         "temperature": 0.2,
         "max_output_tokens": 8192
