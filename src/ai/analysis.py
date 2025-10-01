@@ -127,7 +127,7 @@ def analyze_digest(api_key: str, hours_24: int, context_window_days: int, specs:
 
     # 3. chunk_by_time
     # TODO: max_tokens を適切に設定する
-    chunks = chunk_by_time(enriched_msgs, max_chunk_size=50) # 仮のmax_chunk_size
+    chunks = chunk_by_time(enriched_msgs, max_tokens=4000) # 仮のmax_tokens
 
     summaries = []
     model = setup_gemini(api_key, gemini_model)
