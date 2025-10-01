@@ -45,18 +45,10 @@ def concat(summaries: List[str]) -> str:
 
     for i in range(1, len(summaries)):
         current_summary = summaries[i]
-        # 2つ目以降の「## 全体の空気感」の見出しを削除
-        if current_summary.strip().startswith("## 全体の空気感"):
-            # 見出し行を削除し、その後の内容のみを抽出
-            lines = current_summary.split('\n')
-            # 最初の見出し行のみを削除
-            if lines and lines[0].strip().startswith("## 全体の空気感"):
-                filtered_lines = lines[1:]
-                processed_summaries.append("\n".join(filtered_lines).strip())
-            else:
-                processed_summaries.append(current_summary)
-        else:
-            processed_summaries.append(current_summary)
+        # 2つ目以降のチャンクから、すべての見出し（# で始まる行）を削除
+        lines = current_summary.split('\n')
+        filtered_lines = [line for line in lines if not line.strip().startswith('#')]
+        processed_summaries.append("\n".join(filtered_lines).strip())
 
     return "\n\n— 続き —\n\n".join(processed_summaries)
 
