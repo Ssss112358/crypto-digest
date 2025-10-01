@@ -399,6 +399,10 @@ def main() -> None:
     hours_recent = int(os.getenv('HOURS_RECENT', '6'))
     quiet = os.getenv('QUIET_LOG', '0') == '1'
     dry_run = os.getenv('DRY_RUN', '0') == '1'
+    no_filters = os.getenv('NO_FILTERS', '0') == '1'
+    render_style = os.getenv('RENDER_STYLE', 'default')
+    context_window_days = int(os.getenv('CONTEXT_WINDOW_DAYS', '1'))
+    include_evidence_in_output = os.getenv('INCLUDE_EVIDENCE_IN_OUTPUT', '0') == '1'
 
     now = utcnow()
 
@@ -436,10 +440,11 @@ def main() -> None:
     for msg in msgs_24:
         msg['tags'] = tag_message(msg)
 
-    sale_keywords = ["IDO", "プレセール", "プレマ", "claim", "エアドロ", "ポイント", "ホワイトリスト", "KYC", "ステーク", "Mint", "セール", "ローンチ", "launch", "sale", "airdrop"]
-    priority_msgs = [msg for msg in msgs_24 if any(k.lower() in (msg.get('text') or "").lower() for k in sale_keywords)]
-    other_msgs = [msg for msg in msgs_24 if not any(k.lower() in (msg.get('text') or "").lower() for k in sale_keywords)]
-    msgs_24 = priority_msgs + other_msgs
+    if not no_filters:
+        sale_keywords = ["IDO", "プレセール", "プレマ", "claim", "エアドロ", "ポイント", "ホワイトリスト", "KYC", "ステーク", "Mint", "セール", "ローンチ", "launch", "sale", "airdrop"]
+        priority_msgs = [msg for msg in msgs_24 if any(k.lower() in (msg.get('text') or "").lower() for k in sale_keywords)]
+        other_msgs = [msg for msg in msgs_24 if not any(k.lower() in (msg.get('text') or "").lower() for k in sale_keywords)]
+        msgs_24 = priority_msgs + other_msgs
 
     counts = Counter(msg.get('chat_title') or msg.get('chat_username') or msg.get('chat') or '' for msg in msgs_24)
     if not quiet:
