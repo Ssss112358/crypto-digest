@@ -8,6 +8,7 @@ from src.telegram_pull import fetch_messages_smart
 import asyncio
 from datetime import datetime, timedelta, timezone
 from src.rules import tag_message
+import re
 
 def load_msgs(hours_24: int, context_window_days: int, specs: List[str], string_session: str, api_id: int, api_hash: str) -> List[Dict[str, Any]]:
     # 過去 context_window_days 分のメッセージをロード
@@ -37,16 +38,26 @@ def concat(summaries: List[str]) -> str:
         return ""
     return "\\n\\n---\\n\\n".join(summaries)
 
-def chunk_by_time(messages: List[Dict[str, Any]], max_chunk_size: int = 50) -> List[List[Dict[str, Any]]]:
-    # TODO: トークン数に基づいてチャンクに分割するロジックを実装
-    # 現状はメッセージの数に基づいて仮実装
+def chunk_by_time(messages: List[Dict[str, Any]], max_tokens: int = 4000) -> List[List[Dict[str, Any]]]:
+    # トークン数に基づいてチャンクに分割するロジック
+    # 簡易的に文字数（バイト数）をトークン数の代わりとして使用
     chunks = []
     current_chunk = []
+    current_chunk_tokens = 0
+
     for msg in messages:
-        current_chunk.append(msg)
-        if len(current_chunk) >= max_chunk_size:
+        # processed_text が存在すればそれを使用、なければ元のtextを使用
+        msg_text = msg.get('processed_text') or msg.get('text', '')
+        msg_tokens = len(msg_text.encode('utf-8')) # バイト数をトークン数の代わりとする
+
+        if current_chunk_tokens + msg_tokens > max_tokens and current_chunk:
             chunks.append(current_chunk)
             current_chunk = []
+            current_chunk_tokens = 0
+
+        current_chunk.append(msg)
+        current_chunk_tokens += msg_tokens
+
     if current_chunk:
         chunks.append(current_chunk)
     return chunks
@@ -57,8 +68,29 @@ def prepass_enrich(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # メッセージにタグ付け
         msg['tags'] = tag_message(msg)
 
-        # TODO: 時刻正規化、数値抽出、用語保全のロジックを追加
-        # 現状はタグ付けのみ
+        processed_text = msg.get('text', '')
+
+        # 時刻正規化 (例: "今夜" -> 特定のWIB時刻) - これはAIに任せる部分もあるため、ここでは簡易的に
+        # TODO: より高度な時刻正規化ロジックを実装
+        # 現状はAIがプロンプトで処理することを期待
+
+        # 数値の保全 (例: "2%" -> "2パーセント" またはそのまま)
+        # AIが数字を抽象化しないよう、プロンプトで指示済み。ここでは特に変更しない。
+
+        # 用語保全 (例: "直コン" -> "直接コントラクト", "FCFS" -> "先着順")
+        # AIがプロンプトで処理することを期待するが、ここでは簡易的な置換を試みる
+        replacements = {
+            "直コン": "直接コントラクト",
+            "FCFS": "先着順 (First-Come, First-Served)",
+            "WL": "ホワイトリスト",
+            "KYC": "本人確認 (Know Your Customer)",
+            "FDV": "完全希薄化評価額 (Fully Diluted Valuation)",
+            "MC": "時価総額 (Market Cap)",
+        }
+        for old, new in replacements.items():
+            processed_text = processed_text.replace(old, new)
+
+        msg['processed_text'] = processed_text # 処理済みのテキストを新しいキーに保存
         enriched_messages.append(msg)
     return enriched_messages
 
@@ -99,12 +131,25 @@ def analyze_digest(api_key: str, hours_24: int, context_window_days: int, specs:
     summaries = []
     model = setup_gemini(api_key, gemini_model)
 
+    now_dt = datetime.now(timezone.utc) # 現在時刻をUTCで取得
     for chunk in chunks:
-        # 各チャンクから text_24h と text_recent を生成
-        # TODO: チャンクの期間に応じて text_24h と text_recent を適切に生成する
-        # 現状はチャンク内の全メッセージを text_24h と text_recent として扱う
-        text_24h_chunk = build_prompt_corpus(chunk)
-        text_recent_chunk = build_prompt_corpus(chunk) # 仮に同じものを使用
+        # チャンク内のメッセージを時間でフィルタリングして text_24h と text_recent を生成
+        # 24時間以内のメッセージ
+        cutoff_24h = now_dt - timedelta(hours=hours_24)
+        msgs_24h_in_chunk = [
+            msg for msg in chunk
+            if datetime.strptime(msg['date'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc) >= cutoff_24h
+        ]
+        text_24h_chunk = build_prompt_corpus(msgs_24h_in_chunk)
+
+        # 直近のメッセージ (hours_recent は analyze_digest の引数にはないため、hours_24 を仮に使用)
+        # TODO: hours_recent を analyze_digest の引数に追加するか、適切な値を設定する
+        cutoff_recent = now_dt - timedelta(hours=hours_24) # 仮にhours_24を使用
+        msgs_recent_in_chunk = [
+            msg for msg in chunk
+            if datetime.strptime(msg['date'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc) >= cutoff_recent
+        ]
+        text_recent_chunk = build_prompt_corpus(msgs_recent_in_chunk)
 
         prompt = build_prompt(text_24h_chunk, text_recent_chunk, hours_24) # recent_hours は hours_24 を仮に使用
         resp = model.generate_content(prompt)
