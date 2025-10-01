@@ -441,7 +441,7 @@ def main() -> None:
     # save_state(state)
 
     if not quiet:
-        print(f"[ok] posted digest. 24h={len(msgs_24)} recent={len(msgs_recent)}")
+        print("[ok] posted digest.")
 
 
 if __name__ == '__main__':
