@@ -419,6 +419,7 @@ def main() -> None:
     markdown = analyze_digest(
         google_api_key,
         hours_24,
+        hours_recent, # hours_recent を追加
         context_window_days,
         specs,
         string_session,

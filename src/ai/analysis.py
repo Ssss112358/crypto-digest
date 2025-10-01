@@ -37,7 +37,26 @@ def build_prompt(text_24h: str, text_recent: str, recent_hours: int) -> str:
 def concat(summaries: List[str]) -> str:
     if not summaries:
         return ""
-    return "\\n\\n---\\n\\n".join(summaries)
+
+    # 重複する見出しを削除し、区切りを変更
+    processed_summaries = []
+    first_summary = summaries[0]
+    processed_summaries.append(first_summary)
+
+    for i in range(1, len(summaries)):
+        current_summary = summaries[i]
+        # 「全体の空気感」のような見出しが重複している場合、2つ目以降は削除
+        # TODO: より汎用的な見出し削除ロジックを実装
+        # 現状は「全体の空気感」のみを対象とする
+        if current_summary.strip().startswith("## 全体の空気感"):
+            # 見出し行を削除し、その後の内容のみを抽出
+            lines = current_summary.split('\n')
+            filtered_lines = [line for line in lines if not line.strip().startswith("## 全体の空気感")]
+            processed_summaries.append("\n".join(filtered_lines).strip())
+        else:
+            processed_summaries.append(current_summary)
+
+    return "\n\n— 続き —\n\n".join(processed_summaries)
 
 def chunk_by_time(messages: List[Dict[str, Any]], max_tokens: int = 4000) -> List[List[Dict[str, Any]]]:
     # トークン数に基づいてチャンクに分割するロジック
@@ -118,7 +137,7 @@ def build_prompt_corpus(messages: List[Dict[str, Any]]) -> str:
             rows.append(base)
     return "\\n---\\n".join(rows)
 
-def analyze_digest(api_key: str, hours_24: int, context_window_days: int, specs: List[str], string_session: str, api_id: int, api_hash: str, gemini_model: str) -> str:
+def analyze_digest(api_key: str, hours_24: int, hours_recent: int, context_window_days: int, specs: List[str], string_session: str, api_id: int, api_hash: str, gemini_model: str) -> str:
     # 1. load_msgs
     all_msgs = load_msgs(hours_24, context_window_days, specs, string_session, api_id, api_hash)
 
@@ -152,7 +171,7 @@ def analyze_digest(api_key: str, hours_24: int, context_window_days: int, specs:
         ]
         text_recent_chunk = build_prompt_corpus(msgs_recent_in_chunk)
 
-        prompt = build_prompt(text_24h_chunk, text_recent_chunk, hours_24) # recent_hours は hours_24 を仮に使用
+        prompt = build_prompt(text_24h_chunk, text_recent_chunk, hours_recent)
         resp = model.generate_content(prompt)
         if resp.text:
             summaries.append(resp.text.strip())
