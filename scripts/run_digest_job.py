@@ -415,45 +415,21 @@ def main() -> None:
         post_markdown(discord_webhook, markdown)
         return
 
-    msgs_24 = asyncio.run(fetch_messages_smart(hours_24, specs, string_session, api_id, api_hash))
-    for msg in msgs_24:
-        msg['tags'] = tag_message(msg)
-
-    if not no_filters:
-        sale_keywords = ["IDO", "プレセール", "プレマ", "claim", "エアドロ", "ポイント", "ホワイトリスト", "KYC", "ステーク", "Mint", "セール", "ローンチ", "launch", "sale", "airdrop"]
-        priority_msgs = [msg for msg in msgs_24 if any(k.lower() in (msg.get('text') or "").lower() for k in sale_keywords)]
-        other_msgs = [msg for msg in msgs_24 if not any(k.lower() in (msg.get('text') or "").lower() for k in sale_keywords)]
-        msgs_24 = priority_msgs + other_msgs
-
-    counts = Counter(msg.get('chat_title') or msg.get('chat_username') or msg.get('chat') or '' for msg in msgs_24)
-    if not quiet:
-        print(f'[info] telegram 24h counts: {dict(counts)}')
-
-    now_dt = utcnow()
-    cutoff_recent = now_dt - timedelta(hours=hours_recent)
-    msgs_recent = [
-        msg for msg in msgs_24
-        if datetime.strptime(msg['date'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=UTC) >= cutoff_recent
-    ]
-
-    text_24 = build_prompt_corpus(msgs_24)
-    text_recent = build_prompt_corpus(msgs_recent)
-
-    markdown = analyze_digest(google_api_key, text_24, text_recent, hours_recent, gemini_model)
+    # analyze_digest の呼び出し
+    markdown = analyze_digest(
+        google_api_key,
+        hours_24,
+        context_window_days,
+        specs,
+        string_session,
+        api_id,
+        api_hash,
+        gemini_model
+    )
 
     if not markdown.strip(): # 空のMarkdownが返された場合のフォールバック
         print("[info] LLM returned empty narrative, using action-first fallback.")
-        lines = ["### セール/エアドロ速報（フォールバック）"]
-        # no_filtersがTrueの場合はpriority_msgsがない可能性があるので、msgs_24から取得
-        fallback_msgs = priority_msgs if not no_filters else msgs_24
-        if fallback_msgs:
-            for msg in fallback_msgs[:20]:
-                text = (msg.get("text") or "").replace("\n"," ").strip()
-                if len(text) > 160: text = text[:157] + "…"
-                lines.append(f"- {text}")
-        else:
-            lines.append("（情報なし）")
-        markdown = "\n".join(lines)
+        markdown = "### セール/エアドロ速報（フォールバック）\n\n（情報なし）"
     post_markdown(discord_webhook, markdown)
 
     # 旧スキーマに依存するため状態保存は一旦無効化
