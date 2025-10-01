@@ -97,28 +97,7 @@ def flatten_titles(by_category: Dict[str, Any]) -> Set[str]:
     return titles
 
 
-def build_prompt_corpus(messages: List[Dict[str, Any]]) -> str:
-    rows: List[str] = []
-    for msg in messages:
-        text_single = (msg.get("text") or "").replace("\n", " ")
-        title = msg.get("chat_title") or msg.get("chat_username") or msg.get("chat") or "unknown"
-        base = f"{msg.get('date')} {title}: {text_single}"
-        tags = msg.get("tags", {})
-        tag_parts: List[str] = []
-        categories = tags.get("categories") or []
-        if categories:
-            tag_parts.append("categories=" + ",".join(categories))
-        topics = tags.get("topics") or []
-        if topics:
-            tag_parts.append("topics=" + ",".join(topics))
-        deadline = tags.get("deadline")
-        if deadline:
-            tag_parts.append("deadline=" + deadline)
-        if tag_parts:
-            rows.append(base + "\n" + "TAGS: " + "; ".join(tag_parts))
-        else:
-            rows.append(base)
-    return "\n---\n".join(rows)
+
 
 
 def format_links(evidence_ids: List[str], evidence_map: Dict[str, str]) -> str:
@@ -460,25 +439,21 @@ def main() -> None:
     text_24 = build_prompt_corpus(msgs_24)
     text_recent = build_prompt_corpus(msgs_recent)
 
-    result = analyze_digest(google_api_key, text_24, text_recent, hours_recent, gemini_model)
+    markdown = analyze_digest(google_api_key, text_24, text_recent, hours_recent, gemini_model)
 
-    # Fallback mechanism
-    summary_is_empty = not result or not any(result.get(k) for k in ["sales_airdrops", "pipeline", "act_now", "market_pulse", "capsules"])
-    if summary_is_empty and priority_msgs:
-        print("[info] LLM summary was empty, using action-first fallback.")
+    if not markdown.strip(): # 空のMarkdownが返された場合のフォールバック
+        print("[info] LLM returned empty narrative, using action-first fallback.")
         lines = ["### セール/エアドロ速報（フォールバック）"]
-        for msg in priority_msgs[:20]:
-            text = (msg.get("text") or "").replace("\n"," ").strip()
-            # 余計な長文は丸める（リンク除去は既に無い設計だが念のため）
-            if len(text) > 160: text = text[:157] + "…"
-            lines.append(f"- {text}")
-        post_markdown(discord_webhook, "\n".join(lines))
-        return
-
-    evidence_map = build_evidence_map(msgs_24)
-
-    # 新規（v2描画）
-    markdown = build_markdown_v2(now_dt, result, evidence_map)
+        # no_filtersがTrueの場合はpriority_msgsがない可能性があるので、msgs_24から取得
+        fallback_msgs = priority_msgs if not no_filters else msgs_24
+        if fallback_msgs:
+            for msg in fallback_msgs[:20]:
+                text = (msg.get("text") or "").replace("\n"," ").strip()
+                if len(text) > 160: text = text[:157] + "…"
+                lines.append(f"- {text}")
+        else:
+            lines.append("（情報なし）")
+        markdown = "\n".join(lines)
     post_markdown(discord_webhook, markdown)
 
     # 旧スキーマに依存するため状態保存は一旦無効化
