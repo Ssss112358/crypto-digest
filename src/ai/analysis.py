@@ -2,7 +2,8 @@ from __future__ import annotations
 import google.generativeai as genai
 import logging
 from typing import Dict, Any, List, List
-from .json_utils import safe_json_loads
+import json # jsonモジュールを直接使用
+from .json_utils import safe_json_loads # safe_json_loads は COMPOSE ステップで必要になる可能性があるので残す
 from .prompts import ANALYZE_PROMPT, COMPOSE_PROMPT
 from src.telegram_pull import fetch_messages_smart
 import asyncio
@@ -10,6 +11,45 @@ from datetime import datetime, timedelta, timezone
 from src.rules import tag_message
 import re
 import json
+
+def extract_first_json_block(text: str) -> str | None:
+    # 先頭の { と対応する最後の } を大雑把に拾う
+    m_open = text.find('{')
+    m_close = text.rfind('}')
+    if m_open == -1 or m_close == -1 or m_close <= m_open:
+        return None
+    return text[m_open:m_close+1]
+
+def make_min_thread_from_raw(raw_msgs: list[dict]) -> dict:
+    # raw_msgs: [{"id": "...", "time": "...", "text": "..."} ...] 想定
+    take = raw_msgs[:80]  # 念のため上限（爆発防止）
+    messages = []
+    for m in take:
+        messages.append({
+            "msg_id": str(m.get("id") or ""),
+            "time_wib": m.get("time_short") or m.get("date")[11:16] or "", # time_shortがない場合、dateからHH:MMを抽出
+            "text": (m.get("text") or "")[:500]
+        })
+    return {
+        "threads": [{
+            "thread_id": "auto_fallback_1",
+            "title": "自動フォールバック（解析失敗）",
+            "entity_refs": [],
+            "messages": messages
+        }],
+        "entities": [],
+        "meta": {"fallback": True}
+    }
+
+def safe_parse_analysis(text: str) -> dict:
+    block = extract_first_json_block(text or "")
+    if block:
+        try:
+            return json.loads(block)
+        except Exception:
+            pass
+    # 最低限のフォールバック（後述の make_min_thread_from_raw と組で使う）
+    return {"threads": [], "entities": [], "meta": {"fallback": True}}
 
 def load_msgs(hours_24: int, context_window_days: int, specs: List[str], string_session: str, api_id: int, api_hash: str) -> List[Dict[str, Any]]:
     # 過去 context_window_days 分のメッセージをロード
@@ -140,6 +180,67 @@ def build_prompt_corpus(messages: List[Dict[str, Any]]) -> str:
             rows.append(base)
     return "\\n---\\n".join(rows)
 
+def merge_analysis_results(analysis_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    merged_entities = {}
+    merged_threads = {}
+    
+    for result in analysis_results:
+        # Entities のマージ
+        for entity in result.get("entities", []):
+            canonical = entity["canonical"]
+            if canonical not in merged_entities:
+                merged_entities[canonical] = entity
+            else:
+                # エイリアスを統合
+                merged_entities[canonical]["aliases"].extend(
+                    [a for a in entity.get("aliases", []) if a not in merged_entities[canonical]["aliases"]]
+                )
+        
+        # Threads のマージ (thread_id または title で統合)
+        for thread in result.get("threads", []):
+            thread_id = thread.get("thread_id")
+            title = thread.get("title")
+            
+            # 既存のスレッドと類似しているかチェック
+            found_match = False
+            for existing_thread_id, existing_thread in merged_threads.items():
+                # TODO: より高度な類似度判定 (タイトル類似度など)
+                # 現状はthread_idが同じか、タイトルが完全に一致する場合のみマージ
+                if thread_id and existing_thread_id == thread_id:
+                    # メッセージ、facts、risks を統合
+                    existing_thread["messages"].extend(thread.get("messages", []))
+                    existing_thread["facts"].extend(thread.get("facts", []))
+                    existing_thread["risks"].extend(thread.get("risks", []))
+                    existing_thread["entity_refs"].extend(
+                        [e for e in thread.get("entity_refs", []) if e not in existing_thread["entity_refs"]]
+                    )
+                    found_match = True
+                    break
+                elif title and existing_thread.get("title") == title:
+                    # メッセージ、facts、risks を統合
+                    existing_thread["messages"].extend(thread.get("messages", []))
+                    existing_thread["facts"].extend(thread.get("facts", []))
+                    existing_thread["risks"].extend(thread.get("risks", []))
+                    existing_thread["entity_refs"].extend(
+                        [e for e in thread.get("entity_refs", []) if e not in existing_thread["entity_refs"]]
+                    )
+                    found_match = True
+                    break
+            
+            if not found_match:
+                # 新しいスレッドとして追加
+                merged_threads[thread_id or title or f"thread_{len(merged_threads)}"] = thread
+                
+    # 最終的なメタ情報を設定
+    meta = analysis_results[0].get("meta", {}) if analysis_results else {}
+    meta["generated_at"] = datetime.now(timezone.utc).isoformat()
+
+    return {
+        "meta": meta,
+        "entities": list(merged_entities.values()),
+        "threads": list(merged_threads.values())
+    }
+
 def analyze_digest(api_key: str, hours_24: int, hours_recent: int, context_window_days: int, specs: List[str], string_session: str, api_id: int, api_hash: str, gemini_model: str) -> str:
     # 1. load_msgs (過去 context_window_days 分のメッセージをロード)
     all_msgs = load_msgs(hours_24, context_window_days, specs, string_session, api_id, api_hash)
@@ -177,36 +278,27 @@ def analyze_digest(api_key: str, hours_24: int, hours_recent: int, context_windo
         
         resp = analyze_model.generate_content(analyze_prompt_input)
         if resp.text:
-            try:
-                analysis_results.append(safe_json_loads(resp.text.strip()))
-            except Exception as e:
-                logging.error(f"Failed to parse JSON from ANALYZE step (chunk {i+1}): {e}")
-                logging.error(f"LLM response (ANALYZE chunk {i+1}):\\n---\\n{resp.text}\\n---")
-                # エラー時は空の分析結果を追加して続行
-                analysis_results.append({"threads": [], "entities": [], "meta": {}})
+            parsed_analysis = safe_parse_analysis(resp.text.strip())
+            if parsed_analysis.get("meta", {}).get("fallback"): # safe_parse_analysisがフォールバックを返した場合
+                logging.warning(f"JSON parse failed for ANALYZE step (chunk {i+1}), applying make_min_thread_from_raw.")
+                # make_min_thread_from_raw には元のメッセージチャンクを渡す
+                analysis_results.append(make_min_thread_from_raw(chunk))
+            else:
+                analysis_results.append(parsed_analysis)
         else:
-            logging.warning(f"LLM returned empty response for ANALYZE step (chunk {i+1}).")
-            analysis_results.append({"threads": [], "entities": [], "meta": {}})
+            logging.warning(f"LLM returned empty response for ANALYZE step (chunk {i+1}), applying make_min_thread_from_raw.")
+            analysis_results.append(make_min_thread_from_raw(chunk))
 
-    # TODO: 複数の analysis_results を統合するロジック (entities, threads など)
-    # 現状は最初のチャンクの分析結果のみを使用するか、単純に連結する
-    # ここでは、単純に各チャンクの分析結果をCOMPOSEに渡すために連結する
-    # ただし、COMPOSEプロンプトは単一のanalysis.jsonを想定しているため、
-    # 複数のチャンクの分析結果を統合した単一のJSONを作成する必要がある。
-    # これは複雑なロジックになるため、一旦、最初のチャンクの分析結果のみを使用する。
-    # あるいは、各チャンクの分析結果を個別にCOMPOSEに渡し、その結果をconcatする。
-    
-    # ここでは、各チャンクの分析結果を個別にCOMPOSEに渡し、その結果をconcatする方針で進める。
-    compose_summaries = []
+    # 複数の analysis_results を統合
+    merged_analysis_data = merge_analysis_results(analysis_results)
+
+    # COMPOSE ステップ
     compose_model = setup_gemini(api_key, gemini_model) # COMPOSEはJSON出力ではないのでresponse_mime_typeは指定しない
 
-    for i, analysis_json_data in enumerate(analysis_results):
-        compose_prompt_input = f"{COMPOSE_PROMPT.strip()}\n\n## 入力データ (analysis.json チャンク {i+1}/{len(analysis_results)})\n{json.dumps(analysis_json_data, ensure_ascii=False, indent=2)}"
-        resp = compose_model.generate_content(compose_prompt_input)
-        if resp.text:
-            compose_summaries.append(resp.text.strip())
-        else:
-            logging.warning(f"LLM returned empty response for COMPOSE step (chunk {i+1}).")
-            compose_summaries.append("（LLMからの応答がありませんでした。）")
-
-    return concat(compose_summaries)
+    compose_prompt_input = f"{COMPOSE_PROMPT.strip()}\n\n## 入力データ (analysis.json)\n{json.dumps(merged_analysis_data, ensure_ascii=False, indent=2)}"
+    resp = compose_model.generate_content(compose_prompt_input)
+    if resp.text:
+        return resp.text.strip()
+    else:
+        logging.warning("LLM returned empty response for COMPOSE step.")
+        return "（LLMからの応答がありませんでした。）"
