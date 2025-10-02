@@ -50,7 +50,7 @@ def concat(summaries: List[str]) -> str:
         filtered_lines = [line for line in lines if not line.strip().startswith('#')]
         processed_summaries.append("\n".join(filtered_lines).strip())
 
-    return "\n\n— 続き —\n\n".join(processed_summaries)
+    return "\n\n（ここから下は詳細）\n\n".join(processed_summaries)
 
 def chunk_by_time(messages: List[Dict[str, Any]], max_tokens: int = 4000) -> List[List[Dict[str, Any]]]:
     # トークン数に基づいてチャンクに分割するロジック
