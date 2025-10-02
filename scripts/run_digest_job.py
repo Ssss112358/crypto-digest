@@ -374,7 +374,7 @@ def main() -> None:
     google_api_key = os.getenv('GOOGLE_API_KEY', '')
     gemini_model = os.getenv('GEMINI_MODEL', 'models/gemini-2.0-flash')
     discord_webhook = os.getenv('DISCORD_WEBHOOK_URL', '')
-    hours_24 = int(os.getenv('HOURS_24', '24'))
+    hours_24 = int(os.getenv('HOURS_24', '6')) # 24h -> 6h
     hours_recent = int(os.getenv('HOURS_RECENT', '6'))
     quiet = os.getenv('QUIET_LOG', '0') == '1'
     dry_run = os.getenv('DRY_RUN', '0') == '1'
