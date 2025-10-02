@@ -100,9 +100,14 @@ def prepass_enrich(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "KYC": "本人確認 (Know Your Customer)",
             "FDV": "完全希薄化評価額 (Fully Diluted Valuation)",
             "MC": "時価総額 (Market Cap)",
+            "YB": "YieldBasis", # 固有名詞の正規化
+            "YieldBasis": "YieldBasis", # 念のため
+            "EdgeX": "Edgex", # 固有名詞の正規化
+            "Edgex": "Edgex", # 念のため
         }
         for old, new in replacements.items():
-            processed_text = processed_text.replace(old, new)
+            # 大文字小文字を区別しない置換を行うために正規表現を使用
+            processed_text = re.sub(r'\b' + re.escape(old) + r'\b', new, processed_text, flags=re.IGNORECASE)
 
         msg['processed_text'] = processed_text # 処理済みのテキストを新しいキーに保存
         enriched_messages.append(msg)
