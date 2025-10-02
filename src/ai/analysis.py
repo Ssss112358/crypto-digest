@@ -1,14 +1,15 @@
 from __future__ import annotations
 import google.generativeai as genai
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List, List
 from .json_utils import safe_json_loads
-from .prompts import DIGEST_PROMPT
+from .prompts import ANALYZE_PROMPT, COMPOSE_PROMPT
 from src.telegram_pull import fetch_messages_smart
 import asyncio
 from datetime import datetime, timedelta, timezone
 from src.rules import tag_message
 import re
+import json
 
 def load_msgs(hours_24: int, context_window_days: int, specs: List[str], string_session: str, api_id: int, api_hash: str) -> List[Dict[str, Any]]:
     # 過去 context_window_days 分のメッセージをロード
@@ -16,12 +17,15 @@ def load_msgs(hours_24: int, context_window_days: int, specs: List[str], string_
     total_hours = max(hours_24, context_window_days * 24)
     return asyncio.run(fetch_messages_smart(total_hours, specs, string_session, api_id, api_hash))
 
-def setup_gemini(api_key: str, model: str = "models/gemini-2.0-flash"):
+def setup_gemini(api_key: str, model: str = "models/gemini-2.0-flash", response_mime_type: str = None):
     genai.configure(api_key=api_key)
-    return genai.GenerativeModel(model, generation_config={
+    config = {
         "temperature": 0.2,
         "max_output_tokens": 8192
-    })
+    }
+    if response_mime_type:
+        config["response_mime_type"] = response_mime_type
+    return genai.GenerativeModel(model, generation_config=config)
 
 def build_prompt(text_24h: str, text_recent: str, recent_hours: int) -> str:
     sections = [
@@ -137,23 +141,23 @@ def build_prompt_corpus(messages: List[Dict[str, Any]]) -> str:
     return "\\n---\\n".join(rows)
 
 def analyze_digest(api_key: str, hours_24: int, hours_recent: int, context_window_days: int, specs: List[str], string_session: str, api_id: int, api_hash: str, gemini_model: str) -> str:
-    # 1. load_msgs
+    # 1. load_msgs (過去 context_window_days 分のメッセージをロード)
     all_msgs = load_msgs(hours_24, context_window_days, specs, string_session, api_id, api_hash)
 
-    # 2. prepass_enrich
+    # 2. prepass_enrich (タグ付け、用語保全など)
     enriched_msgs = prepass_enrich(all_msgs)
 
-    # 3. chunk_by_time
+    # 3. chunk_by_time (メッセージをチャンクに分割)
     # TODO: max_tokens を適切に設定する
     chunks = chunk_by_time(enriched_msgs, max_tokens=4000) # 仮のmax_tokens
 
-    summaries = []
-    model = setup_gemini(api_key, gemini_model)
+    # ANALYZE ステップ
+    analysis_results = []
+    analyze_model = setup_gemini(api_key, gemini_model, response_mime_type="application/json")
 
-    now_dt = datetime.now(timezone.utc) # 現在時刻をUTCで取得
-    for chunk in chunks:
+    now_dt = datetime.now(timezone.utc)
+    for i, chunk in enumerate(chunks):
         # チャンク内のメッセージを時間でフィルタリングして text_24h と text_recent を生成
-        # 24時間以内のメッセージ
         cutoff_24h = now_dt - timedelta(hours=hours_24)
         msgs_24h_in_chunk = [
             msg for msg in chunk
@@ -161,22 +165,48 @@ def analyze_digest(api_key: str, hours_24: int, hours_recent: int, context_windo
         ]
         text_24h_chunk = build_prompt_corpus(msgs_24h_in_chunk)
 
-        # 直近のメッセージ (hours_recent は analyze_digest の引数にはないため、hours_24 を仮に使用)
-        # TODO: hours_recent を analyze_digest の引数に追加するか、適切な値を設定する
-        cutoff_recent = now_dt - timedelta(hours=hours_24) # 仮にhours_24を使用
+        cutoff_recent = now_dt - timedelta(hours=hours_recent)
         msgs_recent_in_chunk = [
             msg for msg in chunk
             if datetime.strptime(msg['date'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc) >= cutoff_recent
         ]
         text_recent_chunk = build_prompt_corpus(msgs_recent_in_chunk)
 
-        prompt = build_prompt(text_24h_chunk, text_recent_chunk, hours_recent)
-        resp = model.generate_content(prompt)
+        # ANALYZE プロンプト
+        analyze_prompt_input = f"{ANALYZE_PROMPT.strip()}\n\n## 入力データ (チャンク {i+1}/{len(chunks)})\n### 過去{hours_24}時間のイベント一覧\n{text_24h_chunk}\n### 直近{hours_recent}時間の重点イベント\n{text_recent_chunk}"
+        
+        resp = analyze_model.generate_content(analyze_prompt_input)
         if resp.text:
-            summaries.append(resp.text.strip())
+            try:
+                analysis_results.append(safe_json_loads(resp.text.strip()))
+            except Exception as e:
+                logging.error(f"Failed to parse JSON from ANALYZE step (chunk {i+1}): {e}")
+                logging.error(f"LLM response (ANALYZE chunk {i+1}):\\n---\\n{resp.text}\\n---")
+                # エラー時は空の分析結果を追加して続行
+                analysis_results.append({"threads": [], "entities": [], "meta": {}})
         else:
-            logging.warning("LLM returned empty response for a chunk.")
-            summaries.append("（LLMからの応答がありませんでした。）")
+            logging.warning(f"LLM returned empty response for ANALYZE step (chunk {i+1}).")
+            analysis_results.append({"threads": [], "entities": [], "meta": {}})
 
-    # 4. concat
-    return concat(summaries)
+    # TODO: 複数の analysis_results を統合するロジック (entities, threads など)
+    # 現状は最初のチャンクの分析結果のみを使用するか、単純に連結する
+    # ここでは、単純に各チャンクの分析結果をCOMPOSEに渡すために連結する
+    # ただし、COMPOSEプロンプトは単一のanalysis.jsonを想定しているため、
+    # 複数のチャンクの分析結果を統合した単一のJSONを作成する必要がある。
+    # これは複雑なロジックになるため、一旦、最初のチャンクの分析結果のみを使用する。
+    # あるいは、各チャンクの分析結果を個別にCOMPOSEに渡し、その結果をconcatする。
+    
+    # ここでは、各チャンクの分析結果を個別にCOMPOSEに渡し、その結果をconcatする方針で進める。
+    compose_summaries = []
+    compose_model = setup_gemini(api_key, gemini_model) # COMPOSEはJSON出力ではないのでresponse_mime_typeは指定しない
+
+    for i, analysis_json_data in enumerate(analysis_results):
+        compose_prompt_input = f"{COMPOSE_PROMPT.strip()}\n\n## 入力データ (analysis.json チャンク {i+1}/{len(analysis_results)})\n{json.dumps(analysis_json_data, ensure_ascii=False, indent=2)}"
+        resp = compose_model.generate_content(compose_prompt_input)
+        if resp.text:
+            compose_summaries.append(resp.text.strip())
+        else:
+            logging.warning(f"LLM returned empty response for COMPOSE step (chunk {i+1}).")
+            compose_summaries.append("（LLMからの応答がありませんでした。）")
+
+    return concat(compose_summaries)
