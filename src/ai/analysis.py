@@ -1,9 +1,16 @@
 from __future__ import annotations
 import google.generativeai as genai
+from google.api_core import exceptions as google_exceptions
 import logging
 from typing import Dict, Any, List, List
 import json # jsonモジュールを直接使用
 import json # jsonモジュールを直接使用
+
+class GeminiQuotaExceededError(RuntimeError):
+    """Raised when Gemini API quota is exhausted."""
+    pass
+
+
 from .json_utils import safe_json_loads # safe_json_loads は COMPOSE ステップで必要になる可能性があるので残す
 from .prompts import ANALYZE_PROMPT, COMPOSE_PROMPT
 from src.telegram_pull import fetch_messages_smart
@@ -375,7 +382,11 @@ def analyze_digest(api_key: str, hours_24: int, hours_recent: int, context_windo
         # ANALYZE プロンプト
         analyze_prompt_input = f"{ANALYZE_PROMPT.strip()}\n\n## 入力データ (チャンク {i+1}/{len(chunks)})\n### 過去{hours_24}時間のイベント一覧\n{text_24h_chunk}\n### 直近{hours_recent}時間の重点イベント\n{text_recent_chunk}"
         
-        resp = analyze_model.generate_content(analyze_prompt_input)
+        try:
+            resp = analyze_model.generate_content(analyze_prompt_input)
+        except google_exceptions.ResourceExhausted as exc:
+            logging.error("Gemini quota exhausted during analyze chunk %s: %s", i + 1, exc)
+            raise GeminiQuotaExceededError("Gemini API quota exhausted") from exc
         parsed_analysis = safe_parse_analysis(resp.text.strip() if resp.text else "", chunk)
         analysis_results.append(parsed_analysis)
 
@@ -386,7 +397,11 @@ def analyze_digest(api_key: str, hours_24: int, hours_recent: int, context_windo
     compose_model = setup_gemini(api_key, gemini_model) # COMPOSEはJSON出力ではないのでresponse_mime_typeは指定しない
 
     compose_prompt_input = f"{COMPOSE_PROMPT.strip()}\n\n## 入力データ (analysis.json)\n{json.dumps(merged_analysis_data, ensure_ascii=False, indent=2)}"
-    resp = compose_model.generate_content(compose_prompt_input)
+    try:
+        resp = compose_model.generate_content(compose_prompt_input)
+    except google_exceptions.ResourceExhausted as exc:
+        logging.error("Gemini quota exhausted during compose step: %s", exc)
+        raise GeminiQuotaExceededError("Gemini API quota exhausted") from exc
     if resp.text:
         return resp.text.strip()
     else:

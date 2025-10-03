@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 from src.telegram_pull import fetch_messages_smart
 from src.rules import tag_message
-from src.ai.analysis import analyze_digest
+from src.ai.analysis import analyze_digest, GeminiQuotaExceededError
 from src.delivery.discord import post_markdown
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -360,6 +360,20 @@ def build_markdown_v2(now: datetime, result: Dict[str, Any], evidence_map: Dict[
     return "\n".join(lines)
 
 
+def build_quota_exceeded_markdown(now: datetime, hours_24: int, hours_recent: int, context_window_days: int) -> str:
+    now_wib = now + WIB_OFFSET
+    lines = [
+        f"**Digest paused {dtfmt(now)} UTC / {now_wib.strftime('%H:%M')} WIB**",
+        "Gemini API quota was exhausted, so the automated summary is paused.",
+        "Wait for the quota window to reset or adjust the API plan before rerunning.",
+        "",
+        f"- 24h window: last {hours_24}h",
+        f"- Recent focus: last {hours_recent}h",
+        f"- Context history: {context_window_days} day(s)",
+    ]
+    return "\n".join(lines)
+
+
 def main() -> None:
     specs = parse_source_specs()
     if not specs:
@@ -416,18 +430,23 @@ def main() -> None:
         return
 
     # analyze_digest の呼び出し
-    markdown = analyze_digest(
-        google_api_key,
-        hours_24,
-        hours_recent, # hours_recent を追加
-        context_window_days,
-        specs,
-        string_session,
-        api_id,
-        api_hash,
-        gemini_model
-    )
-
+    quota_notice = False
+    try:
+        markdown = analyze_digest(
+            google_api_key,
+            hours_24,
+            hours_recent, # hours_recent を追加
+            context_window_days,
+            specs,
+            string_session,
+            api_id,
+            api_hash,
+            gemini_model
+        )
+    except GeminiQuotaExceededError as exc:
+        quota_notice = True
+        print(f"[warn] Gemini quota exhausted: {exc}")
+        markdown = build_quota_exceeded_markdown(now, hours_24, hours_recent, context_window_days)
     if not markdown.strip(): # 空のMarkdownが返された場合のフォールバック
         print("[info] LLM returned empty narrative, using action-first fallback.")
         markdown = "### セール/エアドロ速報（フォールバック）\n\n（情報なし）"
@@ -442,7 +461,10 @@ def main() -> None:
     # save_state(state)
 
     if not quiet:
-        print("[ok] posted digest.")
+        if quota_notice:
+            print("[ok] posted quota notice.")
+        else:
+            print("[ok] posted digest.")
 
 
 if __name__ == '__main__':
