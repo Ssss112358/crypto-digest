@@ -16,6 +16,7 @@ from .prompts import ANALYZE_PROMPT, COMPOSE_PROMPT
 from src.telegram_pull import fetch_messages_smart
 from src.rules import tag_message
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 
 WIB = timezone(timedelta(hours=7))
