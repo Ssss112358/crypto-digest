@@ -14,101 +14,107 @@ class GeminiQuotaExceededError(RuntimeError):
 from .json_utils import safe_json_loads # safe_json_loads は COMPOSE ステップで必要になる可能性があるので残す
 from .prompts import ANALYZE_PROMPT, COMPOSE_PROMPT
 from src.telegram_pull import fetch_messages_smart
+from src.rules import tag_message
 import asyncio
 from datetime import datetime, timedelta, timezone
-from src.rules import tag_message
-import re
-import json
+
+WIB = timezone(timedelta(hours=7))
+
+RENDER_CONFIG = {
+    'style': 'paragraph',
+    'force_sections': ['Now', 'Heads-up', 'Context', 'その他'],
+    'always_emit_others': True,
+    'chunk_limit': 1900,
+    'header_template': '6hダイジェスト | 窓口: {start}-{end} WIB',
+}
 
 def extract_first_json_block(text: str) -> str | None:
-    # 先頭の { と対応する最後の } を大雑把に拾う
+    if not text:
+        return None
     m_open = text.find('{')
     m_close = text.rfind('}')
     if m_open == -1 or m_close == -1 or m_close <= m_open:
         return None
-    return text[m_open:m_close+1]
+    return text[m_open:m_close + 1]
 
-def make_min_thread_from_raw(raw_msgs: list[dict]) -> dict:
-    # raw_msgs: [{"id": "...", "time": "...", "text": "..."} ...] 想定
-    take = raw_msgs[:80]  # 念のため上限（爆発防止）
-    messages = []
-    for m in take:
-        messages.append({
-            "msg_id": str(m.get("id") or ""),
-            "time_wib": m.get("time_short") or m.get("date")[11:16] or "", # time_shortがない場合、dateからHH:MMを抽出
-            "text": (m.get("text") or "")[:500]
-        })
-    return {
-        "threads": [{
-            "thread_id": "auto_fallback_1",
-            "title": "自動フォールバック（解析失敗）",
-            "entity_refs": [],
-            "messages": messages
-        }],
-        "entities": [],
-        "meta": {"fallback": True}
-    }
-
-def safe_parse_analysis(text: str) -> dict:
-    block = extract_first_json_block(text or "")
-    if block:
-        try:
-            return json.loads(block)
-        except Exception:
-            pass
-    # 最低限のフォールバック（後述の make_min_thread_from_raw と組で使う）
-    return {"threads": [], "entities": [], "meta": {"fallback": True}}
-
-def extract_first_json_block(text: str) -> str | None:
-    if not text: return None
-    a = text.find('{'); b = text.rfind('}')
-    return text[a:b+1] if (a != -1 and b != -1 and b > a) else None
-
-REQUIRED_THREAD_KEYS = ("thread_id", "title", "entity_refs", "messages", "facts")
 
 def normalize_thread(t: dict) -> dict:
-    t.setdefault("thread_id", t.get("thread_id") or "auto_"+str(abs(hash(t.get("title","")))) )
-    t.setdefault("title", t.get("title") or "Auto Fallback")
-    t.setdefault("entity_refs", t.get("entity_refs") or [])
-    t.setdefault("messages", t.get("messages") or [])
-    t.setdefault("facts", t.get("facts") or [])  # ★必ず存在させる
+    t.setdefault('thread_id', t.get('thread_id') or 'auto_{}'.format(abs(hash(t.get('title', '')))))
+    t.setdefault('title', t.get('title') or 'Auto Fallback')
+    t.setdefault('entity_refs', list(t.get('entity_refs') or []))
+    t.setdefault('messages', list(t.get('messages') or []))
+    t.setdefault('facts', list(t.get('facts') or []))
+    t.setdefault('notes', list(t.get('notes') or []))
+    t.setdefault('risks', list(t.get('risks') or []))
+    t.setdefault('section_hint', t.get('section_hint') or 'その他')
+    if not t.get('mention_count'):
+        t['mention_count'] = len(t['messages'])
+    time_range = t.get('time_range') or {}
+    if not time_range:
+        time_range = {}
+    if not time_range.get('start_wib'):
+        time_range['start_wib'] = _infer_time_boundary(t['messages'], True)
+    if not time_range.get('end_wib'):
+        time_range['end_wib'] = _infer_time_boundary(t['messages'], False)
+    t['time_range'] = time_range
     return t
+
+
+
+
+def _infer_time_boundary(messages: list[dict], first: bool) -> str | None:
+    times: list[str] = []
+    for msg in messages:
+        time_wib = msg.get('time_wib') or ''
+        if isinstance(time_wib, str) and len(time_wib) >= 5 and time_wib[2] == ':':
+            times.append(time_wib[:5])
+    if not times:
+        return None
+    return min(times) if first else max(times)
 
 def make_min_thread_from_raw(raw_msgs: list[dict]) -> dict:
     take = raw_msgs[:80]
     messages = [{
-        "msg_id": str(m.get("id","")),
-        "time_wib": (m.get("time_short") or m.get("date") or "")[11:16] if (m.get("date") and len(m.get("date")) >= 16) else (m.get("time_short") or ""),
-        "text": (m.get("text") or "")[:500]
+        'msg_id': str(m.get('id', '')),
+        'time_wib': (m.get('time_short') or m.get('date') or '')[11:16] if (m.get('date') and len(m.get('date')) >= 16) else (m.get('time_short') or ''),
+        'text': (m.get('text') or '')[:500]
     } for m in take]
-
-    doc = {
-        "threads": [normalize_thread({
-            "thread_id": "auto_fallback_1",
-            "title": "自動フォールバック（解析失敗）",
-            "entity_refs": [],
-            "messages": messages,
-            "facts": []  # ★空でも置く
-        })],
-        "entities": [],
-        "meta": {"fallback": True}
+    thread = normalize_thread({
+        'thread_id': 'auto_fallback_1',
+        'title': 'Auto fallback: parse failure',
+        'entity_refs': [],
+        'messages': messages,
+        'facts': [],
+        'notes': [],
+        'risks': [],
+        'section_hint': 'その他',
+        'mention_count': len(messages),
+        'time_range': {
+            'start_wib': _infer_time_boundary(messages, True),
+            'end_wib': _infer_time_boundary(messages, False),
+        },
+    })
+    return {
+        'threads': [thread],
+        'entities': [],
+        'meta': {'fallback': True},
     }
-    return doc
+
 
 def safe_parse_analysis(text: str, raw_msgs: list[dict]) -> dict:
-    blk = extract_first_json_block(text or "")
+    blk = extract_first_json_block(text or '')
     if blk:
         try:
             data = json.loads(blk)
-            # threadsが空ならフォールバックに差し替え
-            if not data.get("threads"):
+            threads = data.get('threads') or []
+            if not threads:
                 return make_min_thread_from_raw(raw_msgs)
-            # threadごとに正規化
-            data["threads"] = [normalize_thread(t) for t in data.get("threads", [])]
+            data['threads'] = [normalize_thread(t) for t in threads]
             return data
         except Exception:
             pass
     return make_min_thread_from_raw(raw_msgs)
+
 
 def load_msgs(hours_24: int, context_window_days: int, specs: List[str], string_session: str, api_id: int, api_hash: str) -> List[Dict[str, Any]]:
     # 過去 context_window_days 分のメッセージをロード
@@ -239,115 +245,129 @@ def build_prompt_corpus(messages: List[Dict[str, Any]]) -> str:
             rows.append(base)
     return "\\n---\\n".join(rows)
 
-def merge_analysis_results(analysis_results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    merged_entities = {}
-    merged_threads = {}
-    
-    for result in analysis_results:
-        # Entities のマージ
-        for entity in result.get("entities", []):
-            canonical = entity["canonical"]
-            if canonical not in merged_entities:
-                merged_entities[canonical] = entity
-            else:
-                # エイリアスを統合
-                merged_entities[canonical]["aliases"].extend(
-                    [a for a in entity.get("aliases", []) if a not in merged_entities[canonical]["aliases"]]
-                )
-        
-        # Threads のマージ (thread_id または title で統合)
-        for thread in result.get("threads", []):
-            thread_id = thread.get("thread_id")
-            title = thread.get("title")
-            
-            # 既存のスレッドと類似しているかチェック
-            found_match = False
-            for existing_thread_id, existing_thread in merged_threads.items():
-                # TODO: より高度な類似度判定 (タイトル類似度など)
-                # 現状はthread_idが同じか、タイトルが完全に一致する場合のみマージ
-                if thread_id and existing_thread_id == thread_id:
-                    # メッセージ、facts、risks を統合
-                    existing_thread["messages"].extend(thread.get("messages", []))
-                    existing_thread["facts"].extend(thread.get("facts", []))
-                    existing_thread["risks"].extend(thread.get("risks", []))
-                    existing_thread["entity_refs"].extend(
-                        [e for e in thread.get("entity_refs", []) if e not in existing_thread["entity_refs"]]
-                    )
-                    found_match = True
-                    break
-                elif title and existing_thread.get("title") == title:
-                    # メッセージ、facts、risks を統合
-                    existing_thread["messages"].extend(thread.get("messages", []))
-                    existing_thread["facts"].extend(thread.get("facts", []))
-                    existing_thread["risks"].extend(thread.get("risks", []))
-                    existing_thread["entity_refs"].extend(
-                        [e for e in thread.get("entity_refs", []) if e not in existing_thread["entity_refs"]]
-                    )
-                    found_match = True
-                    break
-            
-            if not found_match:
-                # 新しいスレッドとして追加
-                merged_threads[thread_id or title or f"thread_{len(merged_threads)}"] = thread
-                
-    # 最終的なメタ情報を設定
-    meta = analysis_results[0].get("meta", {}) if analysis_results else {}
-    meta["generated_at"] = datetime.now(timezone.utc).isoformat()
+def _time_to_minutes(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        hours, minutes = value.split(':', 1)
+        return int(hours) * 60 + int(minutes)
+    except Exception:
+        return None
 
-    return {
-        "meta": meta,
-        "entities": list(merged_entities.values()),
-        "threads": list(merged_threads.values())
-    }
+
+def _merge_time_range(current: dict | None, incoming: dict | None) -> dict:
+    result = dict(current or {})
+    incoming = incoming or {}
+    start_candidates = [result.get('start_wib'), incoming.get('start_wib')]
+    valid_starts = [v for v in start_candidates if _time_to_minutes(v) is not None]
+    if valid_starts:
+        result['start_wib'] = min(valid_starts, key=_time_to_minutes)
+    elif incoming.get('start_wib') and not result.get('start_wib'):
+        result['start_wib'] = incoming.get('start_wib')
+
+    end_candidates = [result.get('end_wib'), incoming.get('end_wib')]
+    valid_ends = [v for v in end_candidates if _time_to_minutes(v) is not None]
+    if valid_ends:
+        result['end_wib'] = max(valid_ends, key=_time_to_minutes)
+    elif incoming.get('end_wib') and not result.get('end_wib'):
+        result['end_wib'] = incoming.get('end_wib')
+    return result
+
 
 def merge_analysis_results(results: list[dict]) -> dict:
-    merged = {"threads": [], "entities": [], "meta": {}}
-    by_title = {}
+    merged_entities: dict[str, dict] = {}
+    threads_index: dict[tuple, dict] = {}
 
     for res in results:
-        for th in res.get("threads", []):
-            th = normalize_thread(th)  # ★必ず正規化
-            key = (th.get("title") or "").strip().lower()
-            if key in by_title:
-                existing = by_title[key]
-                existing.setdefault("messages", []).extend(th.get("messages", []))
-                existing.setdefault("entity_refs", []).extend(th.get("entity_refs", []))
-                existing.setdefault("facts", []).extend(th.get("facts", []))  # ★ここ
-                existing.setdefault("risks", []).extend(th.get("risks", [])) # risksも追加
-            else:
-                by_title[key] = normalize_thread({
-                    "thread_id": th["thread_id"],
-                    "title": th["title"],
-                    "entity_refs": th.get("entity_refs", []),
-                    "messages": th.get("messages", []),
-                    "facts": th.get("facts", []),  # ★ここ
-                    "risks": th.get("risks", []) # risksも追加
-                })
+        for entity in res.get('entities', []):
+            canonical = entity.get('canonical')
+            if not canonical:
+                continue
+            stored = merged_entities.setdefault(canonical, dict(entity))
+            if stored is entity:
+                continue
+            aliases = list(stored.get('aliases', []))
+            for alias in entity.get('aliases', []):
+                if alias not in aliases:
+                    aliases.append(alias)
+            stored['aliases'] = aliases
 
-    merged["threads"] = list(by_title.values())
-    merged["entities"] = _merge_entities(results)  # 既存関数想定
-    
-    # 最終的なメタ情報を設定
-    meta = results[0].get("meta", {}) if results else {}
-    meta["generated_at"] = datetime.now(timezone.utc).isoformat()
-    merged["meta"] = meta
+        for thread in res.get('threads', []):
+            normalized = normalize_thread(thread)
+            entity_refs = tuple(sorted(normalized.get('entity_refs') or []))
+            section_key = normalized.get('section_hint') or 'その他'
+            title_key = (normalized.get('title') or '').strip().lower()
+            key = (entity_refs, section_key, title_key)
 
-    return merged
+            existing = threads_index.get(key)
+            if not existing:
+                new_thread = {
+                    'thread_id': normalized.get('thread_id') or 'thread_{}'.format(len(threads_index) + 1),
+                    'title': normalized.get('title'),
+                    'entity_refs': list(normalized.get('entity_refs', [])),
+                    'messages': list(normalized.get('messages', [])),
+                    'facts': list(normalized.get('facts', [])),
+                    'notes': list(normalized.get('notes', [])),
+                    'risks': list(normalized.get('risks', [])),
+                    'section_hint': section_key,
+                    'mention_count': normalized.get('mention_count') or len(normalized.get('messages', [])),
+                    'time_range': dict(normalized.get('time_range') or {}),
+                }
+                threads_index[key] = new_thread
+                continue
+
+            existing.setdefault('messages', []).extend(normalized.get('messages', []))
+            existing.setdefault('facts', []).extend(normalized.get('facts', []))
+            existing.setdefault('notes', []).extend(normalized.get('notes', []))
+            existing.setdefault('risks', []).extend(normalized.get('risks', []))
+
+            refs = existing.setdefault('entity_refs', [])
+            for ref in normalized.get('entity_refs', []):
+                if ref not in refs:
+                    refs.append(ref)
+
+            existing['mention_count'] = existing.get('mention_count', 0) + (
+                normalized.get('mention_count') or len(normalized.get('messages', []))
+            )
+            existing['time_range'] = _merge_time_range(existing.get('time_range'), normalized.get('time_range'))
+
+    meta = results[0].get('meta', {}) if results else {}
+    meta['generated_at'] = datetime.now(timezone.utc).isoformat()
+
+    merged_threads = [normalize_thread(thread) for thread in threads_index.values()]
+
+    return {
+        'meta': meta,
+        'entities': list(merged_entities.values()),
+        'threads': merged_threads,
+    }
 
 def _merge_entities(results: list[dict]) -> list[dict]:
-    merged_entities = {}
+    merged_entities: dict[str, dict] = {}
     for res in results:
-        for entity in res.get("entities", []):
-            canonical = entity["canonical"]
-            if canonical not in merged_entities:
-                merged_entities[canonical] = entity
-            else:
-                merged_entities[canonical]["aliases"].extend(
-                    [a for a in entity.get("aliases", []) if a not in merged_entities[canonical]["aliases"]]
-                )
+        for entity in res.get("entities", []) or []:
+            canonical = entity.get("canonical")
+            if not canonical:
+                continue
+
+            current = merged_entities.get(canonical)
+            if current is None:
+                base = dict(entity)
+                base["aliases"] = list(entity.get("aliases") or [])
+                merged_entities[canonical] = base
+                continue
+
+            aliases = current.setdefault("aliases", [])
+            for alias in entity.get("aliases", []) or []:
+                if alias not in aliases:
+                    aliases.append(alias)
+
+            for key, value in entity.items():
+                if key not in current:
+                    current[key] = value
     return list(merged_entities.values())
 
-def analyze_digest(api_key: str, hours_24: int, hours_recent: int, context_window_days: int, specs: List[str], string_session: str, api_id: int, api_hash: str, gemini_model: str) -> str:
+def analyze_digest(api_key: str, hours_24: int, hours_recent: int, context_window_days: int, specs: List[str], string_session: str, api_id: int, api_hash: str, gemini_model: str, digest_mode: str = 'lossless') -> str:
     # 1. load_msgs (過去 context_window_days 分のメッセージをロード)
     all_msgs = load_msgs(hours_24, context_window_days, specs, string_session, api_id, api_hash)
 
@@ -394,9 +414,29 @@ def analyze_digest(api_key: str, hours_24: int, hours_recent: int, context_windo
     merged_analysis_data = merge_analysis_results(analysis_results)
 
     # COMPOSE ステップ
-    compose_model = setup_gemini(api_key, gemini_model) # COMPOSEはJSON出力ではないのでresponse_mime_typeは指定しない
+    compose_model = setup_gemini(api_key, gemini_model)
 
-    compose_prompt_input = f"{COMPOSE_PROMPT.strip()}\n\n## 入力データ (analysis.json)\n{json.dumps(merged_analysis_data, ensure_ascii=False, indent=2)}"
+    window_start_wib = (now_dt - timedelta(hours=hours_recent)).astimezone(WIB)
+    window_end_wib = now_dt.astimezone(WIB)
+    compose_payload = {
+        'analysis': merged_analysis_data,
+        'render_config': RENDER_CONFIG,
+        'digest_mode': digest_mode or 'lossless',
+        'time_window': {
+            'hours_recent': hours_recent,
+            'hours_24': hours_24,
+            'context_window_days': context_window_days,
+            'start_wib': window_start_wib.strftime('%H:%M'),
+            'end_wib': window_end_wib.strftime('%H:%M'),
+            'start_iso': window_start_wib.isoformat(),
+            'end_iso': window_end_wib.isoformat(),
+        },
+        'source': {
+            'specs': specs,
+        },
+    }
+
+    compose_prompt_input = f"{COMPOSE_PROMPT.strip()}\n\n{json.dumps(compose_payload, ensure_ascii=False, indent=2)}"
     try:
         resp = compose_model.generate_content(compose_prompt_input)
     except google_exceptions.ResourceExhausted as exc:
@@ -404,6 +444,19 @@ def analyze_digest(api_key: str, hours_24: int, hours_recent: int, context_windo
         raise GeminiQuotaExceededError("Gemini API quota exhausted") from exc
     if resp.text:
         return resp.text.strip()
-    else:
-        logging.warning("LLM returned empty response for COMPOSE step.")
-        return "（LLMからの応答がありませんでした。）"
+    logging.warning("LLM returned empty response for COMPOSE step.")
+    return "（LLMからの応答がありませんでした。）"
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -362,14 +362,33 @@ def build_markdown_v2(now: datetime, result: Dict[str, Any], evidence_map: Dict[
 
 def build_quota_exceeded_markdown(now: datetime, hours_24: int, hours_recent: int, context_window_days: int) -> str:
     now_wib = now + WIB_OFFSET
+    start_wib = (now - timedelta(hours=hours_recent) + WIB_OFFSET).strftime('%H:%M')
+    end_wib = now_wib.strftime('%H:%M')
+    header = f"**6hダイジェスト | 窓口: {start_wib}-{end_wib} WIB**"
+
+    def footer() -> str:
+        return f"（言及×0 / {start_wib}–{end_wib} WIB）"
+
     lines = [
-        f"**Digest paused {dtfmt(now)} UTC / {now_wib.strftime('%H:%M')} WIB**",
-        "Gemini API quota was exhausted, so the automated summary is paused.",
-        "Wait for the quota window to reset or adjust the API plan before rerunning.",
+        header,
         "",
-        f"- 24h window: last {hours_24}h",
-        f"- Recent focus: last {hours_recent}h",
-        f"- Context history: {context_window_days} day(s)",
+        "## Now",
+        "**Gemini API — quota exhausted**",
+        "Gemini API のリクエスト上限に達したため、この時間帯の自動配信は一時停止しました。",
+        footer(),
+        "",
+        "## Heads-up",
+        "**再試行の目安**",
+        "クォータのリセットを待ってから再実行してください。対策として API プランや呼び出し間隔の調整も検討が必要です。",
+        footer(),
+        "",
+        "## Context",
+        "該当なし",
+        footer(),
+        "",
+        "## その他",
+        "該当なし",
+        footer(),
     ]
     return "\n".join(lines)
 
@@ -396,6 +415,9 @@ def main() -> None:
     render_style = os.getenv('RENDER_STYLE', 'default')
     context_window_days = int(os.getenv('CONTEXT_WINDOW_DAYS', '1'))
     include_evidence_in_output = os.getenv('INCLUDE_EVIDENCE_IN_OUTPUT', '0') == '1'
+    digest_mode = (os.getenv('DIGEST_MODE', 'lossless') or 'lossless').strip().lower()
+    if digest_mode not in {'lossless', 'compact'}:
+        digest_mode = 'lossless'
 
     now = utcnow()
 
@@ -435,13 +457,14 @@ def main() -> None:
         markdown = analyze_digest(
             google_api_key,
             hours_24,
-            hours_recent, # hours_recent を追加
+            hours_recent,  # hours_recent を追加
             context_window_days,
             specs,
             string_session,
             api_id,
             api_hash,
-            gemini_model
+            gemini_model,
+            digest_mode,
         )
     except GeminiQuotaExceededError as exc:
         quota_notice = True

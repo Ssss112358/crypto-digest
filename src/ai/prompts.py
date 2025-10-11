@@ -1,48 +1,59 @@
 ANALYZE_PROMPT = r"""
-あなたはチャットログから話題の束（threads）と関係エンティティ（entities）を抽出してJSONで返す抽出器です。
-厳守: 出力はJSONオブジェクト**のみ**。先頭や末尾に説明・マークダウン・区切り線・コメント・コードフェンスは**絶対に**付けない。
+You are an analyst for the CryptoKudasaiJP Telegram workspace.
+Break the supplied conversation text into structured JSON without omitting any crypto-relevant detail.
 
-JSONスキーマ（最小）:
+Output format:
 {
   "meta": {"timezone": "WIB"},
   "entities": [
-    {"canonical": "Kraken", "type": "exchange", "aliases": ["krkn", "kra"] }
+    {"canonical": "Legion", "type": "project", "aliases": ["legion"] }
   ],
   "threads": [
     {
-      "thread_id": "t1",
-      "title": "Legion allocation & refund confusion",
-      "entity_refs": ["Legion","Kraken","YieldBasis"],
-      "messages": [
-        {"msg_id":"42","time_wib":"12:34","text":"最低2500で出したけどメール来てない"},
-        {"msg_id":"43","time_wib":"12:35","text":"直コンで返金できた"}
-      ],
-      "facts": []  // 任意。無ければ空配列で
+      "thread_id": "thread-1",
+      "title": "Legion — direct contract / refund confusion",
+      "entity_refs": ["Legion", "Kraken"],
+      "messages": [{"msg_id": "123", "time_wib": "12:34", "text": "..."}],
+      "facts": ["Refund link returns 500"],
+      "notes": ["Support escalated"],
+      "risks": ["Users losing allocation"],
+      "section_hint": "Now",
+      "mention_count": 5,
+      "time_range": {"start_wib": "12:10", "end_wib": "14:20"}
     }
   ]
 }
 
-要件:
-- できる限り threads を**必ず1件以上**作る。迷ったら「General market chat」の1件を作る。
-- 非クリプト雑談は messages に**含めない**（除外）。
-- timeは "HH:MM" のみ（WIB前提）。
-- 長文は各 message.text を **500字以内**に切る。（情報量を増やすため）
+Guidelines:
+- Always return valid JSON. Do not include Markdown or commentary outside JSON.
+- Every thread must include: thread_id, title, entity_refs, messages, facts, notes, risks, section_hint, mention_count, time_range.
+- section_hint must be one of ["Now", "Heads-up", "Context", "その他"]. Choose based on urgency: live fire for Now, upcoming actions for Heads-up, background for Context, everything else for その他.
+- mention_count should reflect how many source messages refer to the topic. Derive it from the provided chunk if the model cannot infer a number precisely.
+- time_range.start_wib / end_wib should capture earliest and latest WIB hh:mm observed in the thread; leave null when unavailable.
+- Never drop critical details such as amounts, fees, KYC, FCFS instructions, error messages, or platform-specific steps.
+- For malformed or empty chunks, create a fallback thread via make_min_thread_from_raw with section_hint="その他" so nothing is lost.
+- messages[].text must be trimmed to 500 characters max but keep the core meaning intact.
+- Prefer grouping nearby, same-entity messages into one thread; create multiple threads only when topics clearly diverge.
 """
 
-COMPOSE_PROMPT = r"""あなたはKudasaiJP Telegramグループの編集者。入力は analysis.json（前工程の結果）。
-出力は読者向けの自然文のみ（表やカード、箇条書き乱発や注釈は避ける）。
+COMPOSE_PROMPT = r"""
+You are an editorial assistant composing a Discord-ready digest for the CryptoKudasaiJP team.
+Input is a JSON payload containing:
+- analysis: normalized threads/entities from the ANALYZE step
+- render_config: formatting rules
+- digest_mode: currently 'lossless'
+- time_window: UTC+7 (WIB) coverage window
 
-方針：
-- 冒頭に「KudasaiJP Telegramグループの今日の更新」を1–2段落で要約（全体の空気感はここだけ）。
-- 以降はthread単位で一本に統合して叙述。重複はまとめ、矛盾は併走のまま短く示し、最新の含意を前に置く。
-- coreのみ本文に反映。adjacentは末尾に「ほかには、…」として1–2文で圧縮。offは出力しない。
-- 数字や条件（KYC種別、FCFS有無、最低アロケ、手数料/claim挙動、不具合やメンテ情報）は自然に文へ織り込む（太字やテーブル不要）。
-- 時刻はWIBのみ。同日=HH:MM、別日=MM/DD HH:MM。UTC表記や“すべての時刻は…”の繰り返しは不要。
-
-特に、エアドロやセール、締め切りや収益機会に関することは、読者が見つけやすいように**簡潔な見出しや箇条書き（乱発しない程度に）**を活用し、**重要な情報が埋もれないように**工夫してください。
-
-注意：
-- “管理者へ”などの運営メモは書かない。
-- JSON内の evidence_80 は最終文には出さない（裏取り用にのみ使う）。
-- 断定が難しいときは「～との報告」「～という見方」で短く濁す。冗長なディスクレーマは書かない。
+Produce a Markdown digest that satisfies every rule below:
+1. Header: apply render_config.header_template using time_window.start_wib and time_window.end_wib. Bold the header. Never use 「今日」.
+2. Sections: emit the four sections in render_config.force_sections order. Use level-2 headings (e.g. `## Now`). Always emit 「## その他」 even if it only contains one topic.
+3. Topics: under each section, write one or more paragraphs. Begin each topic with a bold headline (1 line) describing entity and theme, e.g. `**Legion — Direct contract / refund**`.
+4. Paragraph body: write full sentences capturing every concrete data point (amounts, hours, fees, KYC, bugs, FCFS windows, warnings). Inline bullet lists inside the paragraph are allowed to enumerate subpoints, but do not drop information.
+5. Granularity: merge messages about the same entity and close time range into a single paragraph. If multiple discrete actions exist, enumerate them inside the paragraph.
+6. Provenance footer: end every topic with `（言及×N / HH:MM–HH:MM WIB）` using mention_count and time_range from the thread. If the end time is missing, use the start time only (`HH:MM WIB`).
+7. 「その他」 must capture every remaining crypto-relevant thread that does not fit in the earlier sections. Nothing is allowed to fall through.
+8. Do not output evidence URLs or message IDs in the body. Evidence will be posted separately.
+9. Use Japanese for section labels and narrative, but keep normalized English terms where the team expects them (e.g. "Direct contract" alongside 「直コン」).
+10. Obey render_config.chunk_limit indirectly by ensuring paragraphs stay readable; the delivery layer will handle Discord splitting at section/topic boundaries.
+11. Maintain neutral, factual tone focused on operational relevance.
 """
