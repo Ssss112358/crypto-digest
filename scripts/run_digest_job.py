@@ -14,6 +14,7 @@ from src.telegram_pull import fetch_messages_smart
 from src.rules import tag_message
 from src.ai.analysis import analyze_digest, GeminiQuotaExceededError
 from src.delivery.discord import post_markdown
+from src.delivery.normalize import normalize_digest_markdown
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / "state"
@@ -470,9 +471,12 @@ def main() -> None:
         quota_notice = True
         print(f"[warn] Gemini quota exhausted: {exc}")
         markdown = build_quota_exceeded_markdown(now, hours_24, hours_recent, context_window_days)
-    if not markdown.strip(): # 空のMarkdownが返された場合のフォールバック
-        print("[info] LLM returned empty narrative, using action-first fallback.")
-        markdown = "### セール/エアドロ速報（フォールバック）\n\n（情報なし）"
+        if not markdown.strip():  # 空のMarkdownが返された場合のフォールバック
+            print("[info] LLM returned empty narrative, using action-first fallback.")
+            markdown = "### セール/エアドロ速報（フォールバック）\n\n（情報なし）"
+        if not quota_notice:
+            markdown = normalize_digest_markdown(markdown)
+        post_markdown(discord_webhook, markdown)
     post_markdown(discord_webhook, markdown)
 
     # 旧スキーマに依存するため状態保存は一旦無効化
