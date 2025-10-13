@@ -24,6 +24,12 @@ MENTION_RE = re.compile(r"言及×(\d+)")
 FOOTER_RE = re.compile(r"^（言及×\d+(?: / .*?)?）$")
 HEADLINE_SEPARATORS = ("—", "―", "–", " - ", " — ", " ‐ ")
 
+TEXT_REPLACEMENTS = [
+    ("バイナンス", "Binance"),
+    ("バイナ", "Binance"),
+    ("nashinashi133", "ryutaro (nashinashi133)"),
+]
+
 
 def _normalize_section_label(raw: str) -> Optional[str]:
     token = raw.strip().strip('#').strip()
@@ -200,4 +206,7 @@ def normalize_digest_markdown(markdown: str) -> str:
     while output_lines and output_lines[-1] == "":
         output_lines.pop()
 
-    return "\n".join(output_lines)
+    output = "\n".join(output_lines)
+    for old, new in TEXT_REPLACEMENTS:
+        output = output.replace(old, new)
+    return output

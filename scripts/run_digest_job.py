@@ -476,7 +476,6 @@ def main() -> None:
             markdown = "### セール/エアドロ速報（フォールバック）\n\n（情報なし）"
         if not quota_notice:
             markdown = normalize_digest_markdown(markdown)
-        post_markdown(discord_webhook, markdown)
     post_markdown(discord_webhook, markdown)
 
     # 旧スキーマに依存するため状態保存は一旦無効化

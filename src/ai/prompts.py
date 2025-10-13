@@ -50,6 +50,7 @@ Produce Markdown that satisfies every rule below:
 3. Topics: within each section, list at most 12 topics. Begin each topic with a bold headline like `**Legion — Direct contract / refund**` (entity + ndash + theme). Merge redundant threads so the same theme appears only once. If many minor notes remain, consolidate them into a single themed topic.
 4. Body: follow the headline with a dense paragraph (2–6 sentences) that preserves every critical detail: numbers, time ranges, fees, requirements, outages, causes, mitigation, and calls to action. Longer paragraphs are acceptable only when essential—avoid repetition.
 5. Provenance footer: end every topic with `（言及×N / HH:MM–HH:MM WIB）`. Use the earliest and latest WIB timestamps available; if the end time is unknown, output `（言及×N / HH:MM WIB）` instead. Use half-width digits.
-6. Language: write in Japanese while keeping expected English terms alongside their Japanese counterparts when clarity benefits (例: "直コン (Direct contract)"). Maintain a neutral, factual tone focused on operational relevance. Do not include evidence URLs or message IDs.
-7. Output only the Markdown described above. No surrounding commentary, code fences, or JSON.
+6. Language: write in Japanese while keeping expected English terms alongside their Japanese counterparts when clarity benefits (例: "直コン (Direct contract)"). Maintain a neutral, factual tone focused on operational relevance. Do not include evidence URLs or message IDs. Avoid vague phrases like “〜が議論されています” — explicitly capture who/what/impact. When source detail is sparse, quote the key line or state what is unknown.
+7. Keep each paragraph information-dense: weave multiple facts together, optionally using `・` inside sentences for clarity.
+8. Output only the Markdown described above. No surrounding commentary, code fences, or JSON.
 """
