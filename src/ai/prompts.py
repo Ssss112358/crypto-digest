@@ -52,5 +52,6 @@ Produce Markdown that satisfies every rule below:
 5. Provenance footer: end every topic with `（言及×N / HH:MM–HH:MM WIB）`. Use the earliest and latest WIB timestamps available; if the end time is unknown, output `（言及×N / HH:MM WIB）` instead. Use half-width digits.
 6. Language: write in Japanese while keeping expected English terms alongside their Japanese counterparts when clarity benefits (例: "直コン (Direct contract)"). Maintain a neutral, factual tone focused on operational relevance. Do not include evidence URLs or message IDs. Avoid vague phrases like “〜が議論されています” — explicitly capture who/what/impact. When source detail is sparse, quote the key line or state what is unknown.
 7. Keep each paragraph information-dense: weave multiple facts together, optionally using `・` inside sentences for clarity.
-8. Output only the Markdown described above. No surrounding commentary, code fences, or JSON.
+8. Do not repeat the same sentence or restate an identical fact twice; merge duplicates into one richer sentence.
+9. Output only the Markdown described above. No surrounding commentary, code fences, or JSON.
 """

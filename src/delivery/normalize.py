@@ -94,9 +94,7 @@ def normalize_digest_markdown(markdown: str) -> str:
     stripped_text = text.lstrip()
     if stripped_text.startswith('### '):
         return text.strip()
-    if '## ' in text:
-        return text.strip()
-
+    # always reflow to deduplicate topics, even if markdown already uses headings
     lines = [line.rstrip() for line in text.splitlines() if not line.strip().startswith('```')]
     if not lines:
         return text
@@ -165,6 +163,7 @@ def normalize_digest_markdown(markdown: str) -> str:
     extra_sections = [s for s in section_order if s not in FORCED_SECTIONS]
 
     output_lines: List[str] = []
+    global_seen: set[tuple[str, str]] = set()
     header = header_line or "6h Digest"
     if not header.startswith("**"):
         header = f"**{header}**"
@@ -188,11 +187,15 @@ def normalize_digest_markdown(markdown: str) -> str:
             return
         for topic in deduped:
             headline = topic['headline'].strip()
+            paragraph = topic.get('paragraph', '').strip()
+            key = (headline.strip("* ").lower(), paragraph)
+            if key in global_seen:
+                continue
+            global_seen.add(key)
             if not headline.startswith("**"):
                 output_lines.append(f"**{headline}**")
             else:
                 output_lines.append(headline)
-            paragraph = topic.get('paragraph', '').strip()
             if paragraph:
                 output_lines.append(paragraph)
             output_lines.append(topic.get('footer', '（言及×-）'))
