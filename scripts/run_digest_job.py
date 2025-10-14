@@ -474,8 +474,9 @@ def main() -> None:
         if not markdown.strip():  # 空のMarkdownが返された場合のフォールバック
             print("[info] LLM returned empty narrative, using action-first fallback.")
             markdown = "### セール/エアドロ速報（フォールバック）\n\n（情報なし）"
-        if not quota_notice:
-            markdown = normalize_digest_markdown(markdown)
+
+    if not quota_notice:
+        markdown = normalize_digest_markdown(markdown)
     post_markdown(discord_webhook, markdown)
 
     # 旧スキーマに依存するため状態保存は一旦無効化

@@ -91,15 +91,16 @@ def normalize_digest_markdown(markdown: str) -> str:
     text = markdown or ""
     if not text.strip():
         return text
-    stripped_text = text.lstrip()
-    if stripped_text.startswith('### '):
-        return text.strip()
     # always reflow to deduplicate topics, even if markdown already uses headings
     lines = [line.rstrip() for line in text.splitlines() if not line.strip().startswith('```')]
     if not lines:
         return text
 
     header_line = lines[0].strip()
+    if header_line.startswith('### '):
+        header_line = header_line[4:].strip()
+    elif header_line.startswith('## '):
+        header_line = header_line[3:].strip()
     content_lines = lines[1:]
 
     section_topics: Dict[str, List[Dict[str, str]]] = {}
